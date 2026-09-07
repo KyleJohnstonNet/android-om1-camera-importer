@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "cameraModel": "OM-1",
+  "cameraFirmware": null,
+  "phoneModel": null,
+  "grapheneOsBuild": null,
+  "omCaptureVersion": null,
+  "testedAt": null,
+  "results": {
+    "desktopUsbPairing": "not_run",
+    "desktopWirelessOnPhoneHotspot": "not_run",
+    "androidUsbVisibility": "not_run",
+    "androidIndependentPairing": "not_run",
+    "androidOriginalJpegReception": "not_run",
+    "physicalShutterDuringReception": "not_run",
+    "byteIntegrityAgainstCard": "not_run",
+    "screenOff": "not_run",
+    "cameraReconnect": "not_run",
+    "offlineShotCatchUp": "not_run",
+    "eightHourSession": "not_run"
+  },
+  "cameraProtocolVerified": false,
+  "notes": []
+}
