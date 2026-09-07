@@ -5,6 +5,8 @@ Google Photos using Android’s normal network routing. **The camera transfer mi
 is verified. Session imports and cloud upload are implemented in the preview; live
 Google Photos validation awaits OAuth setup.**
 
+[Privacy Policy](PRIVACY.md) · [Terms of Service](TERMS.md)
+
 ## Verified workflow
 
 Set the camera's smartphone Bluetooth standby and Power-off Standby to On.

@@ -34,3 +34,6 @@ troubleshooting and individual device inventories are not kept in public notes.
 
 See docs/development-history.md, docs/preview-queue.md and
 docs/between-shooting-transfer.md for sanitized findings and limitations.
+
+Public privacy and terms documents are provided in PRIVACY.md and TERMS.md,
+linked from the README. Their publication does not establish Google verification.
