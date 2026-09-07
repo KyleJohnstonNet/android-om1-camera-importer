@@ -10,8 +10,8 @@ android {
         applicationId = "dev.om1.camerahelper"
         minSdk = 31
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.6.1-helper"
+        versionCode = 9
+        versionName = "0.7.0-helper"
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions {

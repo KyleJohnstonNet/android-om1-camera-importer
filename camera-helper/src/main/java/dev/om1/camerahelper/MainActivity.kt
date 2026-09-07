@@ -97,6 +97,22 @@ class MainActivity : ComponentActivity() {
             if (required.all { checkSelfPermission(it)==PackageManager.PERMISSION_GRANTED }) prepareConnection()
             else wifi.status.value="Allow nearby-device access and notifications to keep a visible camera connection."
         }
+        var autoConnectHandled by rememberSaveable { mutableStateOf(false) }
+        LaunchedEffect(profileLoaded) {
+            if(profileLoaded && intent.getBooleanExtra("connectForImport",false) && !autoConnectHandled) {
+                autoConnectHandled=true
+                if(ssid.isBlank() || password.isBlank()) wifi.status.value="Scan your camera QR code before starting an import session."
+                else if(required.all { checkSelfPermission(it)==PackageManager.PERMISSION_GRANTED }) prepareConnection()
+                else permission.launch(required)
+            }
+        }
+        LaunchedEffect(status) {
+            if(intent.getBooleanExtra("connectForImport",false) && wifi.network!=null) {
+                intent.removeExtra("connectForImport")
+                startActivity(Intent().setClassName(CameraBridge.MAIN,"dev.om1.importer.MainActivity").addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+                finish()
+            }
+        }
         val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
             val text = result.contents
             if (text == null) wifi.status.value="Scan cancelled or camera unavailable."

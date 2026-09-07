@@ -11,7 +11,7 @@ import java.io.File
 import java.security.MessageDigest
 
 object JpegImport {
-    suspend fun one(context: Context, path: String, expected: Long): String {
+    suspend fun one(context: Context, path: String, expected: Long, queueId: String? = null): String {
         require(CameraFiles.jpeg(path) && expected in 1..CameraFiles.MAX_JPEG_BYTES)
         val response=CameraHelperClient.download(context,path,expected)
         @Suppress("DEPRECATION")
@@ -52,6 +52,7 @@ object JpegImport {
                     receipt.put("width",options.outWidth).put("height",options.outHeight)
                         .put("localFile",dest.name).put("uploaded",false)
                     File(context.filesDir,"last-import.json").writeText(receipt.toString(2))
+                    if(queueId!=null) QueueStore.get(context).update(queueId,"local" to dest.name,"sha" to sha,"state" to "READY","error" to null)
                     val summary="Saved original JPEG: ${path.substringAfterLast('/')}\n$count bytes · ${options.outWidth} × ${options.outHeight}\nSHA-256 verified across helper IPC. No camera deletion or cloud upload."
                     DiagnosticLog.record("jpeg_import",summary)
                     summary

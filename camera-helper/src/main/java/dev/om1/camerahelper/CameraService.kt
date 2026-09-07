@@ -19,7 +19,7 @@ class CameraService : Service() {
                 uid == packageManager.getApplicationInfo(CameraBridge.MAIN, 0).uid &&
                     packageManager.checkSignatures(uid, applicationInfo.uid) == PackageManager.SIGNATURE_MATCH
             }.getOrDefault(false)
-            if (!permitted || msg.what !in listOf(CameraBridge.READ_CAPABILITIES,CameraBridge.LIST_DIRECTORY,CameraBridge.DOWNLOAD_JPEG)) return
+            if (!permitted || msg.what !in listOf(CameraBridge.READ_CAPABILITIES,CameraBridge.LIST_DIRECTORY,CameraBridge.DOWNLOAD_JPEG,CameraBridge.RELEASE)) return
             val operation=msg.what
             val path=msg.data.getString("path").orEmpty()
             val expected=msg.data.getLong("expected")
@@ -30,6 +30,10 @@ class CameraService : Service() {
                 val response = Message.obtain(null, operation, requestId, 0)
                 response.data = Bundle().apply { putString("report",report); putString("error",error); putParcelable("file",descriptor) }
                 runCatching { reply.send(response) }
+            }
+            if(operation==CameraBridge.RELEASE) {
+                connecting?.cancel();wifi.disconnect();respond(report="{\"released\":true}")
+                stopForeground(STOP_FOREGROUND_REMOVE);stopSelf();return
             }
             val network = wifi.network
             if (network == null) { respond(error="Open Camera Link and connect the camera first."); return }

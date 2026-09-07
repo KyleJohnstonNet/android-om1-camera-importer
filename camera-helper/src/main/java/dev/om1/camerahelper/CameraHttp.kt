@@ -101,10 +101,12 @@ object CameraHttp {
             // Bound Binder replies while allowing every entry to be browsed.
             val listing=dev.om1.importer.core.CameraPage.of(entries,offset)
             val page=listing.entries
-            return JSONObject().put("directory",directory).put("total",entries.size)
+            val profile=checkNotNull(CameraProfileStore.load(context)) { "Save a camera profile first." }
+            val cameraId=MessageDigest.getInstance("SHA-256").digest(profile.ssid.toByteArray()).joinToString("") { "%02x".format(it) }
+            return JSONObject().put("cameraId",cameraId).put("directory",directory).put("total",entries.size)
                 .put("offset",listing.offset).put("pageSize",dev.om1.importer.core.CameraPage.SIZE)
                 .put("truncated",entries.size>page.size).put("entries",JSONArray().apply {
-                    page.forEach { put(JSONObject().put("path",it.path).put("size",it.size).put("directory",it.directory)) }
+                    page.forEach { put(JSONObject().put("path",it.path).put("size",it.size).put("directory",it.directory).put("stamp",it.stamp)) }
                 }).toString()
         } finally { conn.disconnect() }
     }

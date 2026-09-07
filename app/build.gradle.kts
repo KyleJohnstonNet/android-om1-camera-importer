@@ -10,8 +10,8 @@ android {
         applicationId = "dev.om1.importer.diagnostic"
         minSdk = 31
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.8.0-diagnostic"
+        versionCode = 9
+        versionName = "0.9.0-preview"
     }
     buildFeatures { compose = true; buildConfig = true }
     compileOptions {
@@ -23,6 +23,11 @@ android {
 }
 dependencies {
     implementation(project(":core"))
+    implementation("androidx.work:work-runtime-ktx:2.10.1")
+    implementation("com.google.android.gms:play-services-auth:22.0.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
+    testImplementation(kotlin("test"))
+    testImplementation("org.json:json:20240303")
     implementation(platform("androidx.compose:compose-bom:2025.04.01"))
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.material3:material3")

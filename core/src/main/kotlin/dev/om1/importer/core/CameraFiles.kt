@@ -25,10 +25,10 @@ object CameraFiles {
             require(size >= 0)
             when {
                 directory(path) && size == 0L -> CameraFile(path,0,true)
-                jpeg(path) && size in 1..MAX_JPEG_BYTES -> CameraFile(path,size,false)
+                jpeg(path) && size in 1..MAX_JPEG_BYTES -> CameraFile(path,size,false,fields[4]+":"+fields[5])
                 else -> null // RAW, movies and unsupported files are not import candidates.
             }
         }.filterNotNull().toList().also { require(it.size <= 10000) { "Too many camera entries." } }
     }
 }
-data class CameraFile(val path: String, val size: Long, val directory: Boolean)
+data class CameraFile(val path: String, val size: Long, val directory: Boolean, val stamp: String = "")

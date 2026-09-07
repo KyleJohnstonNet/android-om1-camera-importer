@@ -15,6 +15,7 @@ object CameraHelperClient {
             "Install the matching OM-1 Camera Link build first."
         }
     }
+    suspend fun release(context: Context) { request(context,CameraBridge.RELEASE) }
     suspend fun read(context: Context): String = request(context,CameraBridge.READ_CAPABILITIES).getString("report")!!
     suspend fun list(context: Context, path: String, offset: Int = 0): String = request(context,CameraBridge.LIST_DIRECTORY,path,offset=offset).getString("report")!!
     suspend fun download(context: Context, path: String, size: Long): Bundle = request(context,CameraBridge.DOWNLOAD_JPEG,path,size)
