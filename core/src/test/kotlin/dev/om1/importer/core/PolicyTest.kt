@@ -1,6 +1,7 @@
 package dev.om1.importer.core
 
 import java.time.Instant
+import java.time.ZoneId
 import kotlin.test.*
 
 class PolicyTest {
@@ -45,6 +46,18 @@ class PolicyTest {
     @Test fun `timer requires positive duration`() {
         assertFailsWith<IllegalArgumentException> { AlbumWindow("album", start, start) }
         assertFailsWith<IllegalArgumentException> { AlbumWindow("album", end, start) }
+    }
+
+    @Test fun `session window uses camera capture time and is end exclusive`() {
+        val window = SessionWindow(100, 200)
+        assertTrue(window.contains(100))
+        assertTrue(window.contains(199))
+        assertFalse(window.contains(200))
+    }
+
+    @Test fun `camera listing date and time parse without punctuation`() {
+        assertEquals(1777897845000, CameraTimestamp.parse("2026/05/04:12:30:45", ZoneId.of("UTC")))
+        assertNull(CameraTimestamp.parse("unknown", ZoneId.of("UTC")))
     }
 
     @Test fun `probe validates private numeric targets and port`() {

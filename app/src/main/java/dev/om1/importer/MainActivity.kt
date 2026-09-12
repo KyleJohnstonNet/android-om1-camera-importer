@@ -25,18 +25,32 @@ import com.google.android.gms.auth.api.identity.*
 import dev.om1.importer.core.CameraBridge
 import kotlinx.coroutines.*
 import kotlinx.coroutines.tasks.await
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import dev.om1.importer.core.SessionTime
 
 class MainActivity:ComponentActivity() {
     private var resumeCount by mutableIntStateOf(0)
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState);enableEdgeToEdge()
+        acceptCameraReturn(intent)
         lifecycle.addObserver(LifecycleEventObserver { _,event -> if(event==Lifecycle.Event.ON_RESUME) resumeCount++ })
         setContent { MaterialTheme { Screen() } }
     }
-    override fun onStop() {
-        val db=QueueStore.get(this)
-        if(db.setting("pendingImport").isNotEmpty()) db.set("pendingImportReady","true")
-        super.onStop()
+    override fun onNewIntent(intent:Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        acceptCameraReturn(intent)
+        resumeCount++
+    }
+    private fun acceptCameraReturn(intent:Intent?) {
+        if(intent?.getBooleanExtra("cameraReady",false)==true) {
+            val db=QueueStore.get(this)
+            if(db.setting("pendingImport").isNotEmpty() && intent.getStringExtra("sessionId")==db.savedSession()?.id &&
+                db.setting("cameraPaused")!="true") db.set("pendingImportReady","true")
+            intent.removeExtra("cameraReady")
+        }
     }
     @Composable private fun Screen() {
         val db=remember { QueueStore.get(this) };val scope=rememberCoroutineScope()
@@ -48,19 +62,38 @@ class MainActivity:ComponentActivity() {
         var rows by remember { mutableStateOf(emptyList<PhotoRow>()) }
         var sessionText by remember { mutableStateOf("No active session") }
         var cellular by remember { mutableStateOf(true) };var cleanup by remember { mutableStateOf(true) };var uploads by remember { mutableStateOf(true) }
-        var includeExisting by remember { mutableStateOf(false) }
-        var albumTitle by rememberSaveable { mutableStateOf("") };var minutes by rememberSaveable { mutableStateOf("60") }
+        val timeFormat=remember { SessionTime.format }
+        var albumTitle by rememberSaveable { mutableStateOf("") }
+        val savedSession=remember { db.session() }
+        val sessionZone=remember { ZoneId.of(savedSession?.optString("zone")?.takeIf { it.isNotBlank() } ?: ZoneId.systemDefault().id) }
+        var sessionStart by rememberSaveable { mutableStateOf(savedSession?.let {
+            java.time.Instant.ofEpochMilli(it.getLong("starts")).atZone(sessionZone).format(timeFormat)
+        } ?: LocalDateTime.now().format(timeFormat)) }
+        var sessionEnd by rememberSaveable { mutableStateOf(savedSession?.let {
+            java.time.Instant.ofEpochMilli(it.getLong("ends")).atZone(sessionZone).format(timeFormat)
+        } ?: LocalDateTime.now().plusHours(8).format(timeFormat)) }
         var albums by remember { mutableStateOf(emptyList<Pair<String,String>>()) }
-        var chosenAlbum by rememberSaveable { mutableStateOf("") };var albumLabel by remember { mutableStateOf("General library") }
+        var chosenAlbum by rememberSaveable { mutableStateOf(savedSession?.optString("album").orEmpty()) }
+        var chosenAlbumTitle by rememberSaveable { mutableStateOf(savedSession?.optString("albumTitle") ?: "General library") }
+        var albumLabel by remember { mutableStateOf("General library") }
         var cloudBusy by remember { mutableStateOf(false) }
         var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-        LaunchedEffect(Unit) { withContext(Dispatchers.IO) { DiagnosticLog.initialize(this@MainActivity) };while(true) { delay(1000);now=System.currentTimeMillis() } }
+        LaunchedEffect(Unit) {
+            withContext(Dispatchers.IO) { DiagnosticLog.initialize(this@MainActivity) }
+            UploadWorker.schedule(this@MainActivity)
+            while(true) { delay(1000);now=System.currentTimeMillis() }
+        }
         LaunchedEffect(revision,now/60000) {
             withContext(Dispatchers.IO) {
                 val snapshot=db.rows();val email=db.setting("accountEmail")
                 val s=db.session();val remaining=(s?.getLong("ends") ?: 0)-now
-                val session=if(remaining>0) "Session active · ${remaining/60000} min left" else "No active session"
-                val album=if(now<db.setting("albumUntil","0").toLong()) db.setting("albumTitle")+" · "+((db.setting("albumUntil").toLong()-now)/60000)+" min left" else "General library"
+                val session=when {
+                    s==null -> "No session selected"
+                    now < s.getLong("starts") -> "Session scheduled · starts ${java.time.Instant.ofEpochMilli(s.getLong("starts")).atZone(ZoneId.systemDefault()).format(timeFormat)}"
+                    now < s.getLong("ends") -> "Session active · ${remaining/60000} min left"
+                    else -> "Photo window ended · eligible photos can still be imported"
+                }
+                val album=db.savedSession()?.albumTitle ?: "No saved session"
                 withContext(Dispatchers.Main) { rows=snapshot;account=email;sessionText=session;albumLabel=album
                     cellular=db.setting("cellular","true")=="true";cleanup=db.setting("cleanup","true")=="true";uploads=db.setting("uploadsEnabled","true")=="true" }
             }
@@ -68,37 +101,71 @@ class MainActivity:ComponentActivity() {
         LaunchedEffect(resumeCount) {
             val pending=withContext(Dispatchers.IO) { db.setting("pendingImport") }
             if(pending.isNotEmpty() && db.setting("pendingImportReady")=="true") {
-                db.set("pendingImport","")
-                try { startForegroundService(Intent(this@MainActivity,ImportService::class.java).setAction(pending)) }
+                try {
+                    startForegroundService(Intent(this@MainActivity,ImportService::class.java).setAction(pending))
+                    db.set("pendingImport","");db.set("pendingImportReady","false")
+                }
                 catch(_:Exception) { message="Unable to start import. Allow notifications and retry." }
             }
         }
         fun launchCamera(action:String) {
+            db.set("cameraPaused","false")
             db.set("pendingImportReady","false");db.set("pendingImport",action)
             try {
                 CameraHelperClient.verify(this@MainActivity)
-                startActivity(Intent().setClassName(CameraBridge.HELPER,CameraBridge.ACTIVITY).putExtra("connectForImport",true))
+                startActivity(Intent().setClassName(CameraBridge.HELPER,CameraBridge.ACTIVITY)
+                    .putExtra("connectForImport",true).putExtra("sessionId",db.savedSession()?.id))
             } catch(_:Exception) { db.set("pendingImport","");message="Install the matching Camera Link app first." }
         }
         var permissionAction by rememberSaveable { mutableStateOf("import") }
         val notifications=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if(granted) launchCamera(permissionAction) else message="Allow notifications so the import has a visible progress control."
+            if(granted && permissionAction=="monitor") {
+                db.savedSession()?.let { session ->
+                    runCatching {
+                        startActivity(Intent().setClassName(CameraBridge.HELPER,CameraBridge.ACTIVITY).putExtra("monitorSession",true)
+                            .putExtra("starts",session.starts).putExtra("ends",session.ends).putExtra("sessionId",session.id))
+                    }.onFailure { message="Session saved. Open Camera Link to check permissions and start watching." }
+                }
+            } else if(granted) launchCamera(permissionAction) else message="Session is saved. Allow notifications to enable camera sync."
         }
         fun begin(action:String) {
             if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) {
                 permissionAction=action;notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
             } else launchCamera(action)
         }
+        fun startTimedSession() {
+            val starts=runCatching { SessionTime.parse(sessionStart,sessionZone) }.getOrNull()
+            val ends=runCatching { SessionTime.parse(sessionEnd,sessionZone) }.getOrNull()
+            if(starts==null || ends==null || ends<=starts) { message="Use local date/time as YYYY-MM-DD HH:mm, with an end after the start.";return }
+            val session=db.startSession(starts,ends,chosenAlbum.takeIf { it.isNotBlank() },chosenAlbumTitle,sessionZone.id)
+            ImportWorker.cancel(this@MainActivity)
+            runCatching { startService(Intent().setClassName(CameraBridge.HELPER,CameraBridge.SERVICE).setAction("stop")) }
+            try {
+                CameraHelperClient.verify(this@MainActivity)
+                if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) {
+                    permissionAction="monitor";notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else startActivity(Intent().setClassName(CameraBridge.HELPER,CameraBridge.ACTIVITY).putExtra("monitorSession",true)
+                    .putExtra("starts",starts).putExtra("ends",ends).putExtra("sessionId",session.id))
+                message="Session saved. Camera Link will check permissions and watch for standby until the final photos are collected."
+            } catch(_:Exception) { message="Session saved. Install/open the matching Camera Link app once to enable automatic power-off sync." }
+        }
         fun authorized(result:AuthorizationResult) {
             cloudBusy=true
             scope.launch {
                 try {
                     val (id,email)=GoogleAuthorization.identity(this@MainActivity,result,cellular)
-                    withContext(Dispatchers.IO) {
-                        if(db.setting("accountId").isNotBlank() && db.setting("accountId")!=id) {
-                            db.set("albumId","");db.set("albumUntil","0");db.set("session","")
+                    val changedAccount=withContext(Dispatchers.IO) {
+                        val changed=db.setting("accountId").isNotBlank() && db.setting("accountId")!=id
+                        if(changed) {
+                            db.set("albumId","");db.set("albumUntil","0");db.endSession()
                         }
                         db.set("accountId",id);db.set("accountEmail",email);db.assignUnassigned(id)
+                        changed
+                    }
+                    if(changedAccount) {
+                        chosenAlbum="";chosenAlbumTitle="General library";albums=emptyList()
+                        ImportWorker.cancel(this@MainActivity)
+                        runCatching { startService(Intent().setClassName(CameraBridge.HELPER,CameraBridge.SERVICE).setAction("stop")) }
                     }
                     message="Google Photos connected. Unassigned local photos are now queued for this account.";UploadWorker.schedule(this@MainActivity)
                 } catch(e:Exception) { message=e.message?.take(220) ?: "Google account setup failed." }
@@ -129,7 +196,7 @@ class MainActivity:ComponentActivity() {
                     val api=PhotosApi(SystemHttp(this@MainActivity,cellular),token)
                     if(create) {
                         val album=withContext(Dispatchers.IO) { api.createAlbum(albumTitle.trim()) }
-                        albums=albums+album;chosenAlbum=album.first;message="Album created. Choose a duration and start its timer."
+                        albums=albums+album;chosenAlbum=album.first;chosenAlbumTitle=album.second;message="Album created. Save the session to use it."
                     } else albums=withContext(Dispatchers.IO) { api.albums() }
                 } catch(e:Exception) { message=e.message?.take(220) ?: "Album request failed." }
                 finally { cloudBusy=false }
@@ -144,31 +211,30 @@ class MainActivity:ComponentActivity() {
                     Text("${rows.count { it.state=="UPLOADED" }} uploaded · ${rows.count { it.state in setOf("READY","UPLOADING","CREATE_PENDING") }} queued · ${rows.count { it.state=="DISCOVERED" }} on camera")
                     if(running) Button(onClick={startService(Intent(this@MainActivity,ImportService::class.java).setAction("stop"))}) { Text("Pause import") }
                     else {
-                        Button(onClick={begin("import")},enabled=db.session()!=null) { Text("Import new photos during this break") }
-                        OutlinedButton(onClick={begin(if(includeExisting) "include" else "baseline")}) { Text("Start an 8-hour session") }
-                        OutlinedButton(enabled=db.session()!=null,onClick={db.set("session","")}) { Text("End session") }
-                        Row { Checkbox(includeExisting,{includeExisting=it});Text("Include existing camera JPEGs in the new session") }
+                        Button(onClick={begin("import")},enabled=db.session()!=null) { Text("Sync this session now") }
+                        OutlinedButton(enabled=db.session()!=null,onClick={
+                            db.endSession();ImportWorker.cancel(this@MainActivity)
+                            runCatching { startService(Intent().setClassName(CameraBridge.HELPER,CameraBridge.SERVICE).setAction("stop")) }
+                        }) { Text("End session") }
+                        OutlinedTextField(sessionStart,{sessionStart=it},label={Text("Session start (YYYY-MM-DD HH:mm)")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                        OutlinedTextField(sessionEnd,{sessionEnd=it},label={Text("Session end (YYYY-MM-DD HH:mm)")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                        Text("Camera clock time zone: ${sessionZone.id}. New session destination: $chosenAlbumTitle",style=MaterialTheme.typography.bodySmall)
+                        Button(onClick={startTimedSession()}) { Text("Save session and watch for power-off") }
                     }
-                    Text("Switch the camera OFF with Power-off Standby enabled before importing. The camera link is released after the batch.",style=MaterialTheme.typography.bodySmall)
+                    Text("The interval is based on camera capture time, so it can be scheduled ahead or backfilled after the hike. Switch the camera OFF with Power-off Standby enabled; the helper keeps watching across app and phone restarts after permissions have been granted.",style=MaterialTheme.typography.bodySmall)
                 } }
                 Text("Google Photos",style=MaterialTheme.typography.titleLarge)
                 Text(if(account.isBlank()) "Not connected. Local imports work without Google setup." else account)
                 Button(enabled=!cloudBusy && !running,onClick={signIn()}) { Text(if(account.isBlank()) "Connect Google Photos" else "Reconnect / change Google account") }
                 if(account.isBlank()) Text("Connecting assigns unassigned queued photos to the selected account. Google Photos authorization must be configured before sign-in will work.",style=MaterialTheme.typography.bodySmall)
-                Text("Destination: $albumLabel")
+                Text("Saved session destination: $albumLabel")
                 if(account.isNotBlank()) {
                     OutlinedButton(enabled=!cloudBusy,onClick={albumAction(false)}) { Text("Load app-created albums") }
-                    albums.forEach { (id,title)->FilterChip(chosenAlbum==id,{chosenAlbum=id},label={Text(title)}) }
+                    FilterChip(chosenAlbum.isEmpty(),{chosenAlbum="";chosenAlbumTitle="General library"},label={Text("General library")})
+                    albums.forEach { (id,title)->FilterChip(chosenAlbum==id,{chosenAlbum=id;chosenAlbumTitle=title},label={Text(title)}) }
                     OutlinedTextField(albumTitle,{albumTitle=it},label={Text("New album name")},modifier=Modifier.fillMaxWidth())
                     OutlinedButton(enabled=!cloudBusy && albumTitle.isNotBlank(),onClick={albumAction(true)}) { Text("Create album") }
-                    OutlinedTextField(minutes,{minutes=it},label={Text("Album duration in minutes (1–480)")},singleLine=true)
-                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                        Button(enabled=chosenAlbum.isNotEmpty() && (minutes.toIntOrNull() ?: 0) in 1..480,onClick={
-                            db.set("albumId",chosenAlbum);db.set("albumTitle",albums.firstOrNull { it.first==chosenAlbum }?.second ?: "Selected album")
-                            db.set("albumAccount",db.setting("accountId"));db.set("albumUntil",(System.currentTimeMillis()+minutes.toLong()*60000).toString())
-                        }) { Text("Start album timer") }
-                        OutlinedButton(onClick={db.set("albumUntil","0")}) { Text("Use library") }
-                    }
+                    Text("Album selection applies when you save a session. Already queued photos keep their destination.",style=MaterialTheme.typography.bodySmall)
                 }
                 Row { Switch(uploads,{uploads=it;db.set("uploadsEnabled",it.toString());if(it) UploadWorker.schedule(this@MainActivity)});Text("Upload queued photos") }
                 Row { Switch(cellular,{cellular=it;db.set("cellular",it.toString());UploadWorker.schedule(this@MainActivity)});Text("Allow cellular uploads") }

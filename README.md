@@ -2,10 +2,15 @@
 
 Import original JPEGs from an OM-1 during shooting breaks, then upload them to
 Google Photos using Android’s normal network routing. **The camera transfer milestone
-is verified. Session imports and cloud upload are implemented in the preview; live
-Google Photos validation awaits OAuth setup.**
+is verified. A retrospective session has also imported and received Google Photos
+confirmations for its matching JPEGs. Unattended switch/reboot behavior still needs
+hardware acceptance testing.**
 
 [Privacy Policy](PRIVACY.md) · [Terms of Service](TERMS.md)
+
+[How the app is used and operates](docs/how-the-app-works.md) explains the intended
+workflow, architecture, persistence, and current limitations with diagrams.
+[Reliability audit](docs/reliability-audit.md) records subsequent bugs, fixes, and tests.
 
 ## Verified workflow
 
@@ -19,8 +24,9 @@ verification work, including newly shot photos and local duplicate handling.
   Bluetooth wake, secondary Wi-Fi and fixed camera HTTP endpoints.
 - **OM-1 Importer** receives originals through signature-protected IPC. Keep it
   on the system route; exclude **only Camera Link** from your VPN if needed.
-- Eight-hour sessions skip existing photos by default; import new JPEGs during breaks.
-- A durable queue resumes uploads and freezes the account and timed album at discovery.
+- Sessions have explicit local start and end times. Their chosen album is frozen, and a past window can backfill every JPEG whose camera capture time falls in that interval.
+- With saved Bluetooth details and Power-off Standby enabled, Camera Link watches for standby advertisements, reconnects, and schedules sync. It persists unfinished collection across restarts. The advertisement's relationship to the physical switch and actual phone reboot recovery still need controlled validation.
+- A durable queue resumes uploads and freezes the account and session album at discovery.
 - Camera originals are never deleted. Phone copies are removed only after confirmed upload.
 - Cloud requests respect system VPN routing and lockdown; a VPN is not required by the app.
 
@@ -28,8 +34,8 @@ verification work, including newly shot photos and local duplicate handling.
 and Android OAuth registration. No backend or embedded client secret is needed.
 
 Preview versions: Importer 0.9.0-preview, Camera Link 0.7.0-helper.
-All 26 Kotlin tests, 11 protocol-tool tests and both APK build/lint checks passed.
-The preview UI and an unauthenticated Google connectivity probe passed in hardware testing. [Hardware evidence](docs/between-shooting-transfer.md),
+Historical preview checks passed; current regression and device results are recorded
+in the [reliability audit](docs/reliability-audit.md). [Hardware evidence](docs/between-shooting-transfer.md),
 [setup and security boundary](docs/camera-helper.md), [current status](PROJECT.md).
 
 ## Build
@@ -43,6 +49,10 @@ python3 -m unittest discover -s tools -p 'test_*.py' -v
 adb install -r camera-helper/build/outputs/apk/debug/camera-helper-debug.apk
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+Queue instrumentation: `./tools/build.sh :app:connectedDebugAndroidTest` with an
+attached test device. The project explicitly keeps APKs installed after tests;
+do not override that setting on a phone containing real app data.
 
 Android 12+. Main application ID dev.om1.importer.diagnostic; helper
 application ID dev.om1.camerahelper. Both APKs must have the same signing certificate.

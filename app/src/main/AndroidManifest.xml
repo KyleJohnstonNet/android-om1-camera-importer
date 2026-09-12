@@ -10,6 +10,9 @@
         android:label="OM-1 Importer" android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:supportsRtl="true">
         <service android:name=".ImportService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <receiver android:name=".CameraReadyReceiver" android:exported="true" android:permission="dev.om1.camerahelper.permission.ACCESS_CAMERA">
+            <intent-filter><action android:name="dev.om1.importer.ACTION_CAMERA_READY" /></intent-filter>
+        </receiver>
         <activity android:name=".DiagnosticsActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>

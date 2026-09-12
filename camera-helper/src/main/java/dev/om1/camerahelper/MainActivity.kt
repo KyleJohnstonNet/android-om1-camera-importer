@@ -62,17 +62,26 @@ class MainActivity : ComponentActivity() {
             } catch(_:Exception) { profileMessage="Saved camera could not be unlocked. Forget it, then scan again." }
             finally { profileLoaded=true }
         }
-        val useBluetooth = wakeBluetooth && bluetoothName!=null && bluetoothPassword!=null
+        val monitoring=intent.getBooleanExtra("monitorSession",false)
+        val useBluetooth = monitoring || (wakeBluetooth && bluetoothName!=null && bluetoothPassword!=null)
         val required = (if (Build.VERSION.SDK_INT >= 33)
             arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES,Manifest.permission.POST_NOTIFICATIONS)
         else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION)) +
             if(useBluetooth) arrayOf(Manifest.permission.BLUETOOTH_SCAN,Manifest.permission.BLUETOOTH_CONNECT) else emptyArray()
         fun connect() {
             try {
+                if(monitoring) {
+                    if(bluetoothName==null || bluetoothPassword==null) { wifi.status.value="Scan the camera QR code to save Bluetooth details for automatic sync.";return }
+                    startForegroundService(Intent(this,CameraService::class.java).setAction("monitor")
+                        .putExtra("starts",intent.getLongExtra("starts",0)).putExtra("ends",intent.getLongExtra("ends",0))
+                        .putExtra("sessionId",intent.getStringExtra("sessionId")))
+                    finish();return
+                }
                 startForegroundService(Intent(this,CameraService::class.java).setAction("connect").apply {
                     putExtra("ssid",ssid); putExtra("password",password); putExtra("wpa3",wpa3)
                     putExtra("bluetoothName",bluetoothName); putExtra("bluetoothPassword",bluetoothPassword)
                     putExtra("wakeBluetooth",useBluetooth)
+                    putExtra("sessionId",intent.getStringExtra("sessionId"))
                 })
             } catch (_: Exception) { wifi.status.value="Unable to start Camera Link. Check app permissions." }
         }
@@ -99,7 +108,7 @@ class MainActivity : ComponentActivity() {
         }
         var autoConnectHandled by rememberSaveable { mutableStateOf(false) }
         LaunchedEffect(profileLoaded) {
-            if(profileLoaded && intent.getBooleanExtra("connectForImport",false) && !autoConnectHandled) {
+            if(profileLoaded && (intent.getBooleanExtra("connectForImport",false) || monitoring) && !autoConnectHandled) {
                 autoConnectHandled=true
                 if(ssid.isBlank() || password.isBlank()) wifi.status.value="Scan your camera QR code before starting an import session."
                 else if(required.all { checkSelfPermission(it)==PackageManager.PERMISSION_GRANTED }) prepareConnection()
@@ -109,7 +118,9 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(status) {
             if(intent.getBooleanExtra("connectForImport",false) && wifi.network!=null) {
                 intent.removeExtra("connectForImport")
-                startActivity(Intent().setClassName(CameraBridge.MAIN,"dev.om1.importer.MainActivity").addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+                startActivity(Intent().setClassName(CameraBridge.MAIN,"dev.om1.importer.MainActivity")
+                    .putExtra("cameraReady",true).putExtra("sessionId",intent.getStringExtra("sessionId"))
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
                 finish()
             }
         }
@@ -137,7 +148,7 @@ class MainActivity : ComponentActivity() {
                 Text("OM-1 Camera Link",style=MaterialTheme.typography.headlineMedium)
                 Text("Camera-only helper · ${BuildConfig.VERSION_NAME}")
                 Card { Text("If your VPN blocks camera access, exclude only OM-1 Camera Link using its split-tunnel settings. Keep your regular internet connection available.",Modifier.padding(16.dp)) }
-                Text("This helper handles the camera connection. Google Photos uploads belong to OM-1 Importer and are not implemented yet.")
+                Text("This helper handles the camera connection. OM-1 Importer manages sessions and Google Photos uploads.")
                 Button(enabled=!active && profileLoaded,onClick={ scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                     .setCaptureActivity(CameraQrActivity::class.java).setPrompt("Scan the Wi-Fi QR code on your OM camera")
                     .setBeepEnabled(false).setBarcodeImageEnabled(false)) }) { Text("Scan camera Wi-Fi QR code") }
@@ -171,7 +182,7 @@ class MainActivity : ComponentActivity() {
                         finally { profileLoaded=true }
                     }
                 }) { Text("Forget camera") }
-                Text("A notification keeps the connection visible while you use the importer. No automatic restart or reconnect after process death.")
+                Text("A notification keeps camera sync visible. A saved watcher retries connections and restores after process restart until its final collection succeeds, or you stop it.")
                 OutlinedButton(onClick={
                     runCatching { startActivity(Intent().setClassName(CameraBridge.MAIN,"dev.om1.importer.MainActivity")) }
                         .onFailure { wifi.status.value="Install OM-1 Importer to read camera capabilities." }

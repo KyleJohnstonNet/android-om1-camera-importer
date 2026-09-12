@@ -39,8 +39,8 @@ object DiagnosticLog {
     }
 
     @Synchronized fun record(kind: String, detail: String) {
-        mutableEvents.value = (mutableEvents.value + DiagnosticEvent(Instant.now().toString(), kind,
-            detail.take(24000))).takeLast(4096)
+        val next = mutableEvents.value + DiagnosticEvent(Instant.now().toString(), kind, detail.take(24000))
+        mutableEvents.value = if(next.size > 4096) next.drop(next.size - 4096) else next
         val stream = file.startWrite()
         try {
             stream.write(report().toByteArray(Charsets.UTF_8))

@@ -14,7 +14,7 @@ class UploadWorker(context:Context,params:WorkerParameters):CoroutineWorker(cont
     companion object {
         private val lock=Mutex()
         fun schedule(context:Context) {
-            WorkManager.getInstance(context).enqueueUniqueWork("google-photos-queue",ExistingWorkPolicy.KEEP,
+            WorkManager.getInstance(context).enqueueUniqueWork("google-photos-queue",ExistingWorkPolicy.APPEND_OR_REPLACE,
                 OneTimeWorkRequestBuilder<UploadWorker>().setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                     .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS).build())
         }
@@ -27,18 +27,24 @@ class UploadWorker(context:Context,params:WorkerParameters):CoroutineWorker(cont
         val rows=db.rows("state IN ('READY','UPLOADING','CREATE_PENDING','UNCERTAIN','UPLOADED') AND account=?",arrayOf(db.setting("accountId")))
         for(original in rows) {
             ensureActive()
+            if(original.account!=db.setting("accountId")) break
             if(System.currentTimeMillis()-started>8*60*1000 || db.setting("uploadsEnabled","true")!="true") { retry=true;break }
-            if(original.state=="UPLOADED") { cleanup(db,original);continue }
             if(original.retryAt>System.currentTimeMillis()) { retry=true;continue }
             var accessToken:String?=null
             try {
+                if(original.state=="UPLOADED") { cleanup(db,original);continue }
                 val token=GoogleAuthorization.token(applicationContext,original.account);accessToken=token
                 val api=PhotosApi(SystemHttp(applicationContext,db.setting("cellular","true")=="true"),token)
                 if(original.state=="UNCERTAIN") {
                     val id=api.reconcile(original)
-                    if(id!=null) { db.update(original.id,"state" to "UPLOADED","media_id" to id,"error" to null);cleanup(db,original.copy(state="UPLOADED",mediaId=id)) }
-                    else db.update(original.id,"error" to "Google creation is unconfirmed. Original kept; use Recheck uploads later.")
-                    continue
+                    if(id!=null) {
+                        db.update(original.id,"state" to "UPLOADED","media_id" to id,"error" to null)
+                        cleanup(db,original.copy(state="UPLOADED",mediaId=id));continue
+                    }
+                    // Google documents same bytes => same mediaItem id, even with a new
+                    // upload token. Verify the original below before retrying that same photo.
+                    // https://developers.google.com/photos/library/guides/upload-media
+                    db.update(original.id,"state" to "CREATE_PENDING")
                 }
                 val file=File(applicationContext.filesDir,"originals/${original.local}")
                 check(original.local?.matches(Regex("[0-9a-f]{64}\\.jpg"))==true && file.length()==original.size) { "Local original missing or changed. Re-import this photo." }
@@ -89,31 +95,55 @@ class UploadWorker(context:Context,params:WorkerParameters):CoroutineWorker(cont
                 }
                 ensureActive()
                 db.update(row.id,"state" to "CREATING")
-                try {
-                    val media=api.create(row,SecretStore.open(checkNotNull(row.uploadToken)))
-                    db.update(row.id,"state" to "UPLOADED","media_id" to media,"upload_url" to null,"upload_token" to null,"error" to null)
-                    cleanup(db,row.copy(state="UPLOADED",mediaId=media))
+                val media=try {
+                    api.create(row,SecretStore.open(checkNotNull(row.uploadToken)))
                 } catch(e:Exception) {
-                    val definiteRejection=e is CloudFailure && e.status in setOf(400,401,403,404,429)
-                    db.update(row.id,"state" to if(definiteRejection) "CREATE_PENDING" else "UNCERTAIN","error" to "Google creation was not confirmed. Original retained.")
+                    when(creationRecovery(e)) {
+                        CreationRecovery.UPLOAD_AGAIN -> db.update(row.id,"state" to "READY","upload_token" to null,"upload_url" to null)
+                        CreationRecovery.RETRY_CREATE -> db.update(row.id,"state" to "CREATE_PENDING")
+                        CreationRecovery.RECONCILE -> db.update(row.id,"state" to "UNCERTAIN")
+                    }
                     throw e
                 }
+                db.update(row.id,"state" to "UPLOADED","media_id" to media,"upload_url" to null,"upload_token" to null,"error" to null)
+                // Cleanup failure must not undo a positive Google receipt.
+                cleanup(db,row.copy(state="UPLOADED",mediaId=media))
             } catch(e:CancellationException) { throw e }
             catch(e:Exception) {
                 if(e is CloudFailure && e.status==401 && accessToken!=null) runCatching { GoogleAuthorization.invalidate(applicationContext,accessToken) }
-                val attempts=original.attempts+1;val delay=minOf(6*60*60*1000L,30000L*(1L shl minOf(attempts,9)))
+                val attempts=original.attempts+1;val delay=minOf(6*60*60*1000L,30000L*(1L shl minOf(attempts,10)))
                 db.update(original.id,"error" to (if(e is IllegalStateException) e.message?.take(220) else "Network interrupted. Upload will resume when connected."),"attempts" to attempts,"retry_at" to System.currentTimeMillis()+delay)
                 retry=true
                 if(e is NetworkUnavailable) break
             }
         }
-        if(retry) Result.retry() else Result.success()
+        if(retry) {
+            // A delayed retry must not block newly imported photos or the manual retry
+            // button behind WorkManager's backoff on this entire unique-work chain.
+            val next=db.rows("state IN ('READY','UPLOADING','CREATE_PENDING','UNCERTAIN') AND account=?",arrayOf(db.setting("accountId")))
+                .minOfOrNull { it.retryAt } ?: System.currentTimeMillis()+30_000
+            UploadRetryWorker.schedule(applicationContext,(next-System.currentTimeMillis()).coerceIn(30_000,6*60*60*1000))
+        }
+        Result.success()
     } }
     private fun cleanup(db:QueueStore,row:PhotoRow) {
-        if(db.setting("cleanup","true")!="true" || row.state!="UPLOADED" || row.mediaId.isNullOrBlank() || row.account.isBlank() || row.local==null) return
-        if(db.rows("local=? AND state NOT IN ('UPLOADED','BASELINE')",arrayOf(row.local)).isNotEmpty()) return
-        if(!row.local.matches(Regex("[0-9a-f]{64}\\.jpg"))) return
-        val file=File(applicationContext.filesDir,"originals/${row.local}")
-        if(!file.exists() || file.delete()) db.update(row.id,"local" to null)
+        synchronized(OriginalFiles.lock) {
+            if(db.setting("cleanup","true")!="true" || row.state!="UPLOADED" || row.mediaId.isNullOrBlank() || row.account.isBlank() || row.local==null) return
+            if(db.rows("local=? AND state NOT IN ('UPLOADED','BASELINE')",arrayOf(row.local)).isNotEmpty()) return
+            if(!row.local.matches(Regex("[0-9a-f]{64}\\.jpg"))) return
+            val file=File(applicationContext.filesDir,"originals/${row.local}")
+            if(!file.exists() || file.delete()) db.update(row.id,"local" to null)
+        }
     }
+}
+
+/** Delayed wakeup, separate from the serialized upload chain so fresh work can run now. */
+class UploadRetryWorker(context:Context,params:WorkerParameters):CoroutineWorker(context,params) {
+    companion object {
+        fun schedule(context:Context,delay:Long) {
+            WorkManager.getInstance(context).enqueueUniqueWork("google-photos-retry",ExistingWorkPolicy.REPLACE,
+                OneTimeWorkRequestBuilder<UploadRetryWorker>().setInitialDelay(delay,TimeUnit.MILLISECONDS).build())
+        }
+    }
+    override suspend fun doWork():Result { UploadWorker.schedule(applicationContext);return Result.success() }
 }

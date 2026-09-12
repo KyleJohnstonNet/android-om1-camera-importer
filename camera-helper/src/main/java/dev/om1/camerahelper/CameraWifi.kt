@@ -20,7 +20,7 @@ class CameraWifi(context: Context) {
     var network: Network? = null
         private set
 
-    fun connect(ssid: String, password: String, wpa3: Boolean, onConnected: () -> Unit = {}) {
+    fun connect(ssid: String, password: String, wpa3: Boolean, onDisconnected: () -> Unit = {}, onConnected: () -> Unit = {}) {
         require(ssid.isNotBlank()) { "Enter the camera Wi-Fi name." }
         require(password.isNotEmpty()) { "Enter the camera Wi-Fi password." }
         val specifier = WifiNetworkSpecifier.Builder().setSsid(ssid).apply {
@@ -41,6 +41,7 @@ class CameraWifi(context: Context) {
                 if (callback !== this) return
                 network = null
                 status.value = "Camera connection lost. Disconnect and connect again to retry."
+                onDisconnected()
             }
             override fun onUnavailable() {
                 if (callback !== this) return
@@ -48,6 +49,7 @@ class CameraWifi(context: Context) {
                 network = null
                 active.value = false
                 status.value = "Connection unavailable or declined. Check camera Wi-Fi, name, password and security type."
+                onDisconnected()
             }
         }
         callback = listener

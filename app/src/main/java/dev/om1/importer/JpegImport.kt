@@ -6,6 +6,7 @@ import android.os.ParcelFileDescriptor
 import dev.om1.importer.core.CameraFiles
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
@@ -13,12 +14,13 @@ import java.security.MessageDigest
 object JpegImport {
     suspend fun one(context: Context, path: String, expected: Long, queueId: String? = null): String {
         require(CameraFiles.jpeg(path) && expected in 1..CameraFiles.MAX_JPEG_BYTES)
-        val response=CameraHelperClient.download(context,path,expected)
+        return CameraHelperClient.download(context,path,expected) { response ->
         @Suppress("DEPRECATION")
         val descriptor=response.getParcelable<ParcelFileDescriptor>("file") ?: error("Helper did not return a JPEG.")
         // Own the descriptor before dispatching so cancellation cannot leak it.
-        return descriptor.use {
+        descriptor.use {
             withContext(Dispatchers.IO) {
+                DiagnosticLog.initialize(context)
                 val receipt=JSONObject(response.getString("report")!!)
                 check(receipt.getString("path")==path && receipt.getLong("bytes")==expected)
                 val directory=File(context.filesDir,"originals").apply { mkdirs() }
@@ -30,6 +32,7 @@ object JpegImport {
                     ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input -> staging.outputStream().use { output ->
                         val buffer=ByteArray(64*1024)
                         while(true) {
+                            ensureActive()
                             val n=input.read(buffer)
                             if(n<0) break
                             count+=n; check(count<=expected)
@@ -43,21 +46,25 @@ object JpegImport {
                     BitmapFactory.decodeFile(staging.path,options)
                     check(options.outWidth>0 && options.outHeight>0 && options.outMimeType=="image/jpeg") { "Downloaded file is not a readable JPEG." }
                     val dest=File(directory,"$sha.jpg")
-                    if(dest.exists()) {
-                        val existing=MessageDigest.getInstance("SHA-256")
-                        dest.inputStream().use { input -> val buffer=ByteArray(65536); while(true) { val n=input.read(buffer); if(n<0) break; existing.update(buffer,0,n) } }
-                        check(existing.digest().joinToString("") { "%02x".format(it) }==sha) { "Existing original failed integrity check." }
-                        staging.delete()
-                    } else check(staging.renameTo(dest)) { "Unable to finalize JPEG." }
+                    synchronized(OriginalFiles.lock) {
+                        if(dest.exists()) {
+                            val existing=MessageDigest.getInstance("SHA-256")
+                            dest.inputStream().use { input -> val buffer=ByteArray(65536); while(true) { val n=input.read(buffer); if(n<0) break; existing.update(buffer,0,n) } }
+                            check(existing.digest().joinToString("") { "%02x".format(it) }==sha) { "Existing original failed integrity check." }
+                            staging.delete()
+                        } else check(staging.renameTo(dest)) { "Unable to finalize JPEG." }
+                        if(queueId!=null) QueueStore.get(context).update(queueId,"local" to dest.name,"sha" to sha,"state" to "READY","error" to null,"attempts" to 0,"retry_at" to 0L)
+                    }
                     receipt.put("width",options.outWidth).put("height",options.outHeight)
                         .put("localFile",dest.name).put("uploaded",false)
-                    File(context.filesDir,"last-import.json").writeText(receipt.toString(2))
-                    if(queueId!=null) QueueStore.get(context).update(queueId,"local" to dest.name,"sha" to sha,"state" to "READY","error" to null)
                     val summary="Saved original JPEG: ${path.substringAfterLast('/')}\n$count bytes · ${options.outWidth} × ${options.outHeight}\nSHA-256 verified across helper IPC. No camera deletion or cloud upload."
-                    DiagnosticLog.record("jpeg_import",summary)
+                    // Diagnostics must never turn a committed original into a failed transfer.
+                    runCatching { File(context.filesDir,"last-import.json").writeText(receipt.toString(2)) }
+                    runCatching { DiagnosticLog.record("jpeg_import",summary) }
                     summary
                 } finally { staging.delete() }
             }
+        }
         }
     }
 }

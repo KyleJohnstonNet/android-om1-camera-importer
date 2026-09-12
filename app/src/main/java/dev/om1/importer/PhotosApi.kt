@@ -18,13 +18,14 @@ class PhotosApi(private val transport:CloudTransport,private val token:String) {
     }
     fun json(path:String,body:JSONObject):JSONObject=JSONObject(call("POST",BASE+path,mapOf("Content-Type" to "application/json"),body.toString().toByteArray()).text())
     fun albums():List<Pair<String,String>> {
-        val albums=mutableListOf<Pair<String,String>>();var next=""
+        val albums=mutableListOf<Pair<String,String>>();var next="";val seenPages=mutableSetOf<String>();var pages=0
         do {
             val suffix=if(next.isEmpty()) "" else "&pageToken="+java.net.URLEncoder.encode(next,"UTF-8")
             val response=JSONObject(call("GET","$BASE/albums?pageSize=50$suffix").text())
             val entries=response.optJSONArray("albums") ?: JSONArray()
             for(i in 0 until entries.length()) { val a=entries.getJSONObject(i);if(a.optBoolean("isWriteable")) albums+=a.getString("id") to a.getString("title") }
-            next=response.optString("nextPageToken");check(albums.size<=10000)
+            next=response.optString("nextPageToken");pages++
+            check(albums.size<=10000 && pages<=200 && (next.isEmpty() || seenPages.add(next))) { "Google album pagination did not finish. Retry later." }
         } while(next.isNotEmpty())
         return albums
     }
@@ -34,7 +35,7 @@ class PhotosApi(private val transport:CloudTransport,private val token:String) {
         return a.getString("id") to a.getString("title")
     }
     fun create(row:PhotoRow,uploadToken:String):String {
-        val body=JSONObject().put("newMediaItems",JSONArray().put(JSONObject().put("description","OM-1 import ${row.id}")
+        val body=JSONObject().put("newMediaItems",JSONArray().put(JSONObject()
             .put("simpleMediaItem",JSONObject().put("fileName",row.path.substringAfterLast('/')).put("uploadToken",uploadToken))))
         row.album?.let { body.put("albumId",it) }
         val response=json("/mediaItems:batchCreate",body).getJSONArray("newMediaItemResults")
@@ -42,7 +43,7 @@ class PhotosApi(private val transport:CloudTransport,private val token:String) {
         val item=response.getJSONObject(0)
         check(item.optString("uploadToken")==uploadToken) { "Google upload-token mismatch." }
         val code=item.optJSONObject("status")?.optInt("code",0) ?: 0
-        if(code!=0) throw CloudFailure(code,"Google could not create this photo (code $code). Original retained.")
+        if(code!=0) throw MediaCreationRejected(code)
         return item.getJSONObject("mediaItem").getString("id").also { check(it.isNotBlank()) }
     }
     /** Only positive, app-created evidence resolves an interrupted create. Absence is not proof of failure. */

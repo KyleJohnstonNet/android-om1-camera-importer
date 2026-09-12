@@ -7,9 +7,11 @@ import android.database.sqlite.SQLiteOpenHelper
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.json.JSONObject
 import java.security.MessageDigest
+import dev.om1.importer.core.CameraTimestamp
+import dev.om1.importer.core.SessionWindow
 
 /** Transactional app-private queue. Account/destination and discovery time never change on retry. */
-class QueueStore private constructor(context: Context): SQLiteOpenHelper(context,"import-queue.db",null,1) {
+class QueueStore internal constructor(context: Context, name: String = "import-queue.db"): SQLiteOpenHelper(context,name,null,2) {
     companion object {
         @Volatile private var instance: QueueStore?=null
         fun get(context: Context)=instance ?: synchronized(this) { instance ?: QueueStore(context.applicationContext).also { instance=it } }
@@ -26,36 +28,66 @@ class QueueStore private constructor(context: Context): SQLiteOpenHelper(context
             media_id TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0, retry_at INTEGER NOT NULL DEFAULT 0)""")
         db.execSQL("CREATE INDEX photo_state ON photos(state,discovered)")
     }
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { error("Unsupported queue upgrade; preserve existing database.") }
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        // Sessions are settings JSON, so v1 data needs no destructive migration.
+        require(oldVersion == 1 && newVersion == 2) { "Unsupported queue upgrade; preserve existing database." }
+    }
     @Synchronized fun setting(key: String, fallback: String=""): String = readableDatabase.rawQuery("SELECT value FROM settings WHERE key=?",arrayOf(key)).use { if(it.moveToFirst()) it.getString(0) else fallback }
     @Synchronized fun set(key: String,value: String) { writableDatabase.insertWithOnConflict("settings",null,ContentValues().apply { put("key",key);put("value",value) },SQLiteDatabase.CONFLICT_REPLACE); changed() }
     private fun changed() { changes.value++ }
-    fun session(): JSONObject?=setting("session").takeIf { it.isNotEmpty() }?.let(::JSONObject)
-    @Synchronized fun begin(camera: String, files: List<SourcePhoto>, includeExisting: Boolean) {
-        val now=System.currentTimeMillis()
-        val account=setting("accountId")
-        val session=JSONObject().put("camera",camera).put("starts",now).put("ends",now+8*60*60*1000L).put("account",account)
-        val db=writableDatabase; db.beginTransaction()
-        try {
-            files.forEach {
-                if(includeExisting) db.delete("photos","id=? AND state='BASELINE'",arrayOf(digest("$camera\u0000${it.path}\u0000${it.size}\u0000${it.stamp}")))
-                insert(camera,it,now,account,if(includeExisting) albumAt(now,account) else null,if(includeExisting) "DISCOVERED" else "BASELINE")
-            }
-            set("session",session.toString());db.setTransactionSuccessful()
-        } finally { db.endTransaction() }
-        changed()
+    @Synchronized fun savedSession(): SavedSession? {
+        val raw=setting("session").takeIf { it.isNotEmpty() } ?: return null
+        val session=SavedSession.read(JSONObject(raw))
+        // Pin legacy windows once, rather than interpreting them in a new zone on every read.
+        if(!JSONObject(raw).has("zone") || !JSONObject(raw).has("id")) set("session",session.json().toString())
+        return session
     }
-    fun albumAt(now: Long,account: String): String? = setting("albumId").takeIf { it.isNotBlank() && setting("albumAccount")==account && now<setting("albumUntil","0").toLong() }
-    @Synchronized fun discover(camera: String,files: List<SourcePhoto>) {
-        val session=session() ?: error("Start a new-photo session first.")
-        check(session.getString("camera")==camera) { "This session belongs to a different camera." }
-        check(System.currentTimeMillis()<session.getLong("ends")) { "Session ended. Start a new session to discover more photos." }
-        val now=System.currentTimeMillis(); val db=writableDatabase; db.beginTransaction()
+    fun session(): JSONObject?=savedSession()?.json()
+    @Synchronized fun startSession(starts: Long, ends: Long, selectedAlbum: String? = null,
+        title: String = if(selectedAlbum == null) "General library" else "Selected album",
+        zone: String = java.time.ZoneId.systemDefault().id): SavedSession {
+        val account=setting("accountId")
+        require(selectedAlbum == null || (selectedAlbum.isNotBlank() && account.isNotBlank()))
+        val session=SavedSession(java.util.UUID.randomUUID().toString(),starts,ends,zone,account,selectedAlbum,title)
+        val db=writableDatabase;db.beginTransaction()
         try {
-            files.forEach { insert(camera,it,now,session.getString("account"),albumAt(now,session.getString("account")),"DISCOVERED") }
+            set("session",session.json().toString())
+            set("pendingImport","");set("pendingImportReady","false");set("cameraPaused","false")
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        changed()
+        return session
+    }
+    @Synchronized fun endSession() {
+        val db=writableDatabase;db.beginTransaction()
+        try {
+            set("session","");set("pendingImport","");set("pendingImportReady","false");set("cameraPaused","true")
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+    @Synchronized fun discover(camera: String,files: List<SourcePhoto>, expectedSession: String = savedSession()?.id.orEmpty()): DiscoveryResult {
+        val session=savedSession() ?: error("Start a session first.")
+        check(session.id==expectedSession) { "Session changed. Retry using the selected session." }
+        check(session.camera==null || session.camera==camera) { "This session belongs to a different camera." }
+        val window=SessionWindow(session.starts,session.ends)
+        val dated=files.map { it to CameraTimestamp.parse(it.stamp,java.time.ZoneId.of(session.zone)) }
+        val matched=dated.filter { (_,time) -> time?.let(window::contains) == true }.map { it.first }
+        val now=System.currentTimeMillis(); val db=writableDatabase; db.beginTransaction()
+        try {
+            if(session.camera==null) set("session",session.copy(camera=camera).json().toString())
+            matched.forEach {
+                val account=session.account
+                val album=session.album
+                insert(camera,it,now,account,album,"DISCOVERED")
+                // A legacy baseline means skipped, not imported. Backfill may claim it,
+                // but must never reroute an actual queued or uploaded photo.
+                db.update("photos",ContentValues().apply {
+                    put("state","DISCOVERED");put("discovered",now);put("account",account);put("album",album)
+                },"id=? AND state='BASELINE'",arrayOf(digest("$camera\u0000${it.path}\u0000${it.size}\u0000${it.stamp}")))
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        changed(); return DiscoveryResult(files.size,matched.size,dated.count { it.second==null },
+            matched.map { digest("$camera\u0000${it.path}\u0000${it.size}\u0000${it.stamp}") }.toSet())
     }
     private fun insert(camera: String,p: SourcePhoto,time: Long,account: String,album: String?,state: String) {
         writableDatabase.insertWithOnConflict("photos",null,ContentValues().apply {
@@ -88,6 +120,7 @@ class QueueStore private constructor(context: Context): SQLiteOpenHelper(context
         } finally { db.endTransaction() };changed()
     }
 }
+data class DiscoveryResult(val total:Int,val matched:Int,val invalidTimestamps:Int,val ids:Set<String>)
 data class SourcePhoto(val path:String,val size:Long,val stamp:String)
 data class PhotoRow(val id:String,val camera:String,val path:String,val size:Long,val stamp:String,val account:String,val album:String?,val state:String,
     val local:String?,val sha:String?,val uploadUrl:String?,val uploadToken:String?,val granularity:Int,val mediaId:String?,val error:String?,val attempts:Int,val retryAt:Long)

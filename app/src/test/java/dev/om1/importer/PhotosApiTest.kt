@@ -9,6 +9,7 @@ class PhotosApiTest {
         val transport=CloudTransport { method,url,headers,body ->
             assertEquals("POST",method);assertTrue(url.endsWith("/mediaItems:batchCreate"));assertEquals("Bearer access",headers["Authorization"])
             val request=JSONObject(body.toString(Charsets.UTF_8));assertEquals("album",request.getString("albumId"))
+            assertFalse(request.getJSONArray("newMediaItems").getJSONObject(0).has("description"))
             val item=request.getJSONArray("newMediaItems").getJSONObject(0).getJSONObject("simpleMediaItem")
             assertEquals("TEST0001.JPG",item.getString("fileName"));assertEquals("upload",item.getString("uploadToken"))
             CloudResponse(200,emptyMap(),"""{"newMediaItemResults":[{"uploadToken":"upload","status":{"code":0},"mediaItem":{"id":"created"}}]}""".toByteArray())
@@ -19,7 +20,8 @@ class PhotosApiTest {
     }
     @Test fun `HTTP success with per-photo failure is not an upload receipt`() {
         val api=PhotosApi(CloudTransport { _,_,_,_->CloudResponse(200,emptyMap(),"""{"newMediaItemResults":[{"uploadToken":"upload","status":{"code":8}}]}""".toByteArray()) },"access")
-        assertFailsWith<CloudFailure> { api.create(row(),"upload") }
+        val error=assertFailsWith<MediaCreationRejected> { api.create(row(),"upload") }
+        assertEquals(CreationRecovery.RETRY_CREATE,creationRecovery(error))
     }
     @Test fun `uncertain album creation reconciles only positive item evidence`() {
         val api=PhotosApi(CloudTransport { _,url,_,body->
@@ -31,5 +33,19 @@ class PhotosApiTest {
     @Test fun `cloud endpoints reject redirects to arbitrary hosts and cleartext`() {
         SystemHttp.validateUrl("https://photoslibrary.googleapis.com/v1/uploads?upload_id=test")
         for(url in listOf("http://photoslibrary.googleapis.com/v1/uploads","https://photoslibrary.googleapis.com.evil.test/v1/uploads","https://user@photoslibrary.googleapis.com/v1/uploads","https://192.168.0.10/","https://www.googleapis.com/other")) assertFails { SystemHttp.validateUrl(url) }
+    }
+    @Test fun `album pagination terminates even if google repeats an empty page`() {
+        var calls=0
+        val api=PhotosApi(CloudTransport { _,_,_,_->
+            calls++
+            CloudResponse(200,emptyMap(),"""{"nextPageToken":"repeat"}""".toByteArray())
+        },"access")
+        assertFailsWith<IllegalStateException> { api.albums() }
+        assertEquals(2,calls)
+    }
+    @Test fun `blank media id is never accepted as a confirmed upload`() {
+        val api=PhotosApi(CloudTransport { _,_,_,_->CloudResponse(200,emptyMap(),
+            """{"newMediaItemResults":[{"uploadToken":"upload","mediaItem":{"id":""}}]}""".toByteArray()) },"access")
+        assertFails { api.create(row(),"upload") }
     }
 }
