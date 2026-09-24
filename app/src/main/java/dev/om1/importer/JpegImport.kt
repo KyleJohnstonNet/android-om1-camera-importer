@@ -12,9 +12,10 @@ import java.io.File
 import java.security.MessageDigest
 
 object JpegImport {
-    suspend fun one(context: Context, path: String, expected: Long, queueId: String? = null): String {
+    suspend fun one(context: Context, path: String, expected: Long, queueId: String? = null,slot:Int=0,progress:(Long)->Unit = {}): String {
+        PowerPolicy.check(context)
         require(CameraFiles.jpeg(path) && expected in 1..CameraFiles.MAX_JPEG_BYTES)
-        return CameraHelperClient.download(context,path,expected) { response ->
+        return CameraHelperClient.download(context,path,expected,slot,progress) { response ->
         @Suppress("DEPRECATION")
         val descriptor=response.getParcelable<ParcelFileDescriptor>("file") ?: error("Helper did not return a JPEG.")
         // Own the descriptor before dispatching so cancellation cannot leak it.
@@ -23,6 +24,7 @@ object JpegImport {
                 DiagnosticLog.initialize(context)
                 val receipt=JSONObject(response.getString("report")!!)
                 check(receipt.getString("path")==path && receipt.getLong("bytes")==expected)
+                check(receipt.optInt("slot")==slot) { "Camera returned a photo from the wrong card slot." }
                 val directory=File(context.filesDir,"originals").apply { mkdirs() }
                 check(directory.usableSpace > expected+16*1024*1024) { "Not enough space for the original JPEG." }
                 val staging=File.createTempFile("import-", ".part",directory)
@@ -33,6 +35,7 @@ object JpegImport {
                         val buffer=ByteArray(64*1024)
                         while(true) {
                             ensureActive()
+                            PowerPolicy.check(context)
                             val n=input.read(buffer)
                             if(n<0) break
                             count+=n; check(count<=expected)
@@ -53,7 +56,12 @@ object JpegImport {
                             check(existing.digest().joinToString("") { "%02x".format(it) }==sha) { "Existing original failed integrity check." }
                             staging.delete()
                         } else check(staging.renameTo(dest)) { "Unable to finalize JPEG." }
-                        if(queueId!=null) QueueStore.get(context).update(queueId,"local" to dest.name,"sha" to sha,"state" to "READY","error" to null,"attempts" to 0,"retry_at" to 0L)
+                        if(queueId!=null) {
+                            val db=QueueStore.get(context)
+                            db.update(queueId,"local" to dest.name,"sha" to sha,"state" to "READY","error" to null,"attempts" to 0,"retry_at" to 0L)
+                            db.reuseConfirmedReceipt(queueId)
+                        }
+                        runCatching { PhotoThumbnails.file(context,sha,dest.name);PhotoThumbnails.prune(context) }
                     }
                     receipt.put("width",options.outWidth).put("height",options.outHeight)
                         .put("localFile",dest.name).put("uploaded",false)

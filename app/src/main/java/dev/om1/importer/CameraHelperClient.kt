@@ -21,9 +21,19 @@ object CameraHelperClient {
         }) { Unit }
     }
     suspend fun read(context: Context): String = request(context,CameraBridge.READ_CAPABILITIES) { it.getString("report")!! }
-    suspend fun list(context: Context, path: String, offset: Int = 0): String = request(context,CameraBridge.LIST_DIRECTORY,path,offset=offset) { it.getString("report")!! }
-    suspend fun <T> download(context: Context, path: String, size: Long, consume:suspend (Bundle)->T): T = request(context,CameraBridge.DOWNLOAD_JPEG,path,size,consume=consume)
-    private suspend fun <T> request(context: Context, operation: Int, path: String="", expected: Long=0, offset: Int=0, extras: Bundle = Bundle(), consume:suspend (Bundle)->T): T = withContext(Dispatchers.Main.immediate) {
+    suspend fun status(context:Context):dev.om1.importer.core.ActivityStatus = withTimeout(4000) {
+        request(context,CameraBridge.STATUS) {
+            val json=org.json.JSONObject(it.getString("report")!!)
+            dev.om1.importer.core.ActivityStatus(json.getString("title"),json.getString("detail"),json.optLong("until"))
+        }
+    }
+    suspend fun cardSlot(context:Context,slot:Int=0):Int = request(context,CameraBridge.CARD_SLOT,extras=Bundle().apply { putInt("slot",slot) }) {
+        org.json.JSONObject(it.getString("report")!!).getInt("slot")
+    }
+    suspend fun list(context: Context, path: String, offset: Int = 0,slot:Int=0): String = request(context,CameraBridge.LIST_DIRECTORY,path,offset=offset,extras=Bundle().apply { putInt("slot",slot) }) { it.getString("report")!! }
+    suspend fun <T> download(context: Context, path: String, size: Long,slot:Int=0,progress:(Long)->Unit = {},consume:suspend (Bundle)->T): T =
+        request(context,CameraBridge.DOWNLOAD_JPEG,path,size,extras=Bundle().apply { putInt("slot",slot) },progress=progress,consume=consume)
+    private suspend fun <T> request(context: Context, operation: Int, path: String="", expected: Long=0, offset: Int=0, extras: Bundle = Bundle(),progress:(Long)->Unit = {},consume:suspend (Bundle)->T): T = withContext(Dispatchers.Main.immediate) {
         verify(context)
         val result = CompletableDeferred<Bundle>()
         val requestId=ids.incrementAndGet()
@@ -31,6 +41,11 @@ object CameraHelperClient {
         val receiver=Messenger(object : Handler(Looper.getMainLooper()) {
             override fun handleMessage(msg: Message) {
                 if (msg.what != operation || msg.arg1 != requestId) return
+                if(operation==CameraBridge.DOWNLOAD_JPEG && msg.data.containsKey("progressBytes")) {
+                    val bytes=msg.data.getLong("progressBytes")
+                    if(!result.isCompleted && bytes in 0..expected) progress(bytes)
+                    return
+                }
                 @Suppress("DEPRECATION")
                 val descriptor=msg.data.getParcelable<ParcelFileDescriptor>("file")
                 val error=msg.data.getString("error")

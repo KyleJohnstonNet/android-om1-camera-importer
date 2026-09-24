@@ -34,6 +34,7 @@ import dev.om1.importer.core.CameraQr
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -45,6 +46,10 @@ class MainActivity : ComponentActivity() {
         val wifi = remember { CameraSession.wifi(this) }
         val active by wifi.active.collectAsStateWithLifecycle()
         val status by wifi.status.collectAsStateWithLifecycle()
+        val activity by CameraSession.activity.collectAsStateWithLifecycle()
+        val watcherRunning by CameraSession.monitoring.collectAsStateWithLifecycle()
+        var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+        LaunchedEffect(Unit) { while(true) { now=System.currentTimeMillis();delay(1000) } }
         var ssid by rememberSaveable { mutableStateOf("") }
         var password by remember { mutableStateOf("") }
         var wpa3 by rememberSaveable { mutableStateOf(true) }
@@ -149,9 +154,16 @@ class MainActivity : ComponentActivity() {
             Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal=20.dp,vertical=18.dp), verticalArrangement=Arrangement.spacedBy(16.dp)) {
                 Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
                     Column { Text("OM-1 Camera Link",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text("Your camera connection companion",style=MaterialTheme.typography.bodyLarge) }
-                    CameraStateTag(if(active) "CONNECTED" else "OFFLINE",if(active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary)
+                    CameraStateTag(if(wifi.network!=null) "CONNECTED" else if(active) "CONNECTING" else if(watcherRunning) "WATCHING" else "IDLE",if(active || watcherRunning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary)
                 }
-                Card(colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.primaryContainer)) { Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) { Text(if(active) "Camera Wi-Fi is connected" else "Connect your OM-1",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold,color=MaterialTheme.colorScheme.onPrimaryContainer);Text(if(active) "Return to Importer when you are ready to sync." else "Scan once to save your camera details, then reconnect in one tap.",color=MaterialTheme.colorScheme.onPrimaryContainer) } }
+                Card(colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.primaryContainer)) {
+                    Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                        Text(activity.title,style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
+                        Text(activity.detail)
+                        activity.countdown(now)?.let { Text(it,style=MaterialTheme.typography.labelLarge) }
+                        Text("Camera Wi-Fi: ${if(wifi.network!=null) "connected" else if(active) "connecting" else "disconnected"}",style=MaterialTheme.typography.bodySmall)
+                    }
+                }
                 Text("1. Add your camera",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
                 ElevatedCard { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
                     Button(enabled=!active && profileLoaded,onClick={ scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setCaptureActivity(CameraQrActivity::class.java).setPrompt("Scan the Wi-Fi QR code on your OM camera").setBeepEnabled(false).setBarcodeImageEnabled(false)) },modifier=Modifier.fillMaxWidth()) { Text("Scan camera Wi-Fi QR code") }

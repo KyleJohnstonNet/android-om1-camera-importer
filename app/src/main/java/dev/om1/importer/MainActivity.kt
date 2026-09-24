@@ -11,6 +11,19 @@ import androidx.activity.compose.*
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import dev.om1.importer.core.RecentPhotos
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -23,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.android.gms.auth.api.identity.*
 import dev.om1.importer.core.CameraBridge
@@ -60,9 +74,14 @@ class MainActivity:ComponentActivity() {
         val revision by db.changes.collectAsStateWithLifecycle()
         val running by ImportService.running.collectAsStateWithLifecycle()
         val importStatus by ImportService.status.collectAsStateWithLifecycle()
+        val uploadActivity by UploadWorker.activity.collectAsStateWithLifecycle()
+        val uploadLimit by UploadWorker.parallelLimit.collectAsStateWithLifecycle()
+        var cameraStatus by remember { mutableStateOf(dev.om1.importer.core.ActivityStatus("Checking Camera Link","Reading the current camera activity…")) }
+        var uploadOverview by remember { mutableStateOf("Checking the upload queue…") }
         var message by rememberSaveable { mutableStateOf("") }
         var account by remember { mutableStateOf("") }
         var rows by remember { mutableStateOf(emptyList<PhotoRow>()) }
+        var preview by remember { mutableStateOf<PhotoRow?>(null) }
         var sessionText by remember { mutableStateOf("No active session") }
         var cellular by remember { mutableStateOf(true) };var cleanup by remember { mutableStateOf(true) };var uploads by remember { mutableStateOf(true) }
         val timeFormat=remember { SessionTime.format }
@@ -81,6 +100,56 @@ class MainActivity:ComponentActivity() {
         var albumLabel by remember { mutableStateOf("General library") }
         var cloudBusy by remember { mutableStateOf(false) }
         var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+        val gpsStatus by LocationRecordingService.status.collectAsStateWithLifecycle()
+        var recordGps by remember { mutableStateOf(db.setting("recordGps")=="true") }
+        var geotag by remember { mutableStateOf(db.setting("geotag")=="true") }
+        var confirmClearGps by remember { mutableStateOf(false) }
+        fun startGps() {
+            runCatching { startForegroundService(Intent(this@MainActivity,LocationRecordingService::class.java)) }
+                .onFailure { message="GPS could not start. Check precise location permission, then toggle recording on again." }
+        }
+        val locationPermission=rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+            if(grants[Manifest.permission.ACCESS_FINE_LOCATION]==true) {
+                db.set("recordGps","true");recordGps=true;startGps()
+            } else { recordGps=false;db.set("recordGps","false");message="Precise location permission is required to record photo locations." }
+        }
+        LaunchedEffect(resumeCount,revision) {
+            recordGps=db.setting("recordGps")=="true"
+        }
+        LaunchedEffect(resumeCount) {
+            if(db.setting("recordGps")=="true" && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED) startGps()
+        }
+        if(confirmClearGps) AlertDialog(onDismissRequest={confirmClearGps=false},title={Text("Delete recorded GPS history?")},
+            text={Text("This cannot be undone. Photos and already prepared uploads are unchanged. New fixes will continue if recording is enabled.")},
+            confirmButton={TextButton(onClick={confirmClearGps=false;scope.launch { withContext(Dispatchers.IO) { LocationHistory.get(this@MainActivity).clear() };message="Recorded GPS history deleted." }}) { Text("Delete history") }},
+            dismissButton={TextButton(onClick={confirmClearGps=false}) { Text("Cancel") }})
+        LaunchedEffect(Unit) {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while(isActive) {
+                    try { cameraStatus=CameraHelperClient.status(this@MainActivity) }
+                    catch(_:TimeoutCancellationException) {
+                        cameraStatus=dev.om1.importer.core.ActivityStatus("Camera Link is not responding","Retrying its status automatically. Open Camera Link if this continues.")
+                    }
+                    catch(e:CancellationException) { throw e }
+                    catch(_:Exception) {
+                        cameraStatus=dev.om1.importer.core.ActivityStatus("Camera Link status unavailable","Open Camera Link to check its state and permissions. Make sure both apps are updated.")
+                    }
+                    delay(2000)
+                }
+            }
+        }
+        LaunchedEffect(now,rows,uploadActivity,uploadLimit,uploads,cellular) {
+            uploadOverview=withContext(Dispatchers.IO) {
+                val manager=getSystemService(android.net.ConnectivityManager::class.java)
+                val caps=manager.getNetworkCapabilities(manager.activeNetwork)
+                val accountId=db.setting("accountId")
+                UploadOverview.describe(rows.filter { it.account==accountId && it.state in setOf("READY","UPLOADING","CREATE_PENDING","CREATING","UNCERTAIN") },
+                    uploadActivity.size,uploadLimit,PowerPolicy.saving(this@MainActivity),uploads,accountId.isNotBlank(),
+                    caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)==true,
+                    caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)==true && !caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR),
+                    cellular,now)
+            }
+        }
         LaunchedEffect(Unit) {
             withContext(Dispatchers.IO) { DiagnosticLog.initialize(this@MainActivity) }
             UploadWorker.schedule(this@MainActivity)
@@ -89,6 +158,7 @@ class MainActivity:ComponentActivity() {
         LaunchedEffect(revision,now/60000) {
             withContext(Dispatchers.IO) {
                 val snapshot=db.rows();val email=db.setting("accountEmail")
+                PhotoThumbnails.prune(this@MainActivity)
                 val s=db.session();val remaining=(s?.getLong("ends") ?: 0)-now
                 val session=when {
                     s==null -> "No session selected"
@@ -205,6 +275,7 @@ class MainActivity:ComponentActivity() {
                 finally { cloudBusy=false }
             }
         }
+        preview?.let { photo -> PhotoPopup(photo) { preview=null } }
         Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
             Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal=20.dp, vertical=18.dp), verticalArrangement=Arrangement.spacedBy(16.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement=Arrangement.SpaceBetween, verticalAlignment=Alignment.CenterVertically) {
@@ -214,7 +285,11 @@ class MainActivity:ComponentActivity() {
                 Card(colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.primaryContainer)) { Column(Modifier.padding(20.dp), verticalArrangement=Arrangement.spacedBy(10.dp)) {
                     Text("Current session", style=MaterialTheme.typography.labelLarge, color=MaterialTheme.colorScheme.onPrimaryContainer)
                     Text(sessionText, style=MaterialTheme.typography.titleLarge, fontWeight=FontWeight.SemiBold, color=MaterialTheme.colorScheme.onPrimaryContainer)
-                    Text(importStatus, color=MaterialTheme.colorScheme.onPrimaryContainer)
+                    Text("Camera · ${cameraStatus.title}",fontWeight=FontWeight.SemiBold)
+                    Text(cameraStatus.detail)
+                    cameraStatus.countdown(now)?.let { Text(it,style=MaterialTheme.typography.labelLarge) }
+                    Text(if(running) "Import · $importStatus" else "Last import · $importStatus",style=MaterialTheme.typography.bodySmall)
+                    Text("Google Photos · $uploadOverview",style=MaterialTheme.typography.bodyMedium)
                     HorizontalDivider(color=MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha=.18f))
                     Text("${rows.count { it.state=="UPLOADED" }} uploaded  ·  ${rows.count { it.state in setOf("READY","UPLOADING","CREATE_PENDING") }} queued  ·  ${rows.count { it.state=="DISCOVERED" }} on camera", style=MaterialTheme.typography.bodyMedium, color=MaterialTheme.colorScheme.onPrimaryContainer)
                     if(running) Button(onClick={startService(Intent(this@MainActivity,ImportService::class.java).setAction("stop"))}) { Text("Pause import") }
@@ -248,19 +323,102 @@ class MainActivity:ComponentActivity() {
                 ElevatedCard { Column(Modifier.padding(horizontal=16.dp,vertical=6.dp)) {
                     PreferenceSwitch("Upload queued photos", uploads) { uploads=it;db.set("uploadsEnabled",it.toString());if(it) UploadWorker.schedule(this@MainActivity) }
                     PreferenceSwitch("Allow cellular uploads", cellular) { cellular=it;db.set("cellular",it.toString());UploadWorker.schedule(this@MainActivity) }
-                    PreferenceSwitch("Remove phone copy after upload", cleanup) { cleanup=it;db.set("cleanup",it.toString());UploadWorker.schedule(this@MainActivity) }
+                    PreferenceSwitch("Remove phone original after upload", cleanup) { cleanup=it;db.set("cleanup",it.toString());UploadWorker.schedule(this@MainActivity) }
                     OutlinedButton(onClick={scope.launch { withContext(Dispatchers.IO) { db.rows("state != 'UPLOADED'").forEach { db.update(it.id,"retry_at" to 0L) } };UploadWorker.schedule(this@MainActivity) }},modifier=Modifier.padding(vertical=10.dp)) { Text("Retry pending uploads") }
+                } }
+                SectionTitle("Photo locations", "Record this phone’s GPS independently of camera imports. Both options are off by default.")
+                ElevatedCard { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                    PreferenceSwitch("Record phone GPS",recordGps) { enabled ->
+                        if(!enabled) { recordGps=false;db.set("recordGps","false");stopService(Intent(this@MainActivity,LocationRecordingService::class.java)) }
+                        else locationPermission.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION,Manifest.permission.ACCESS_FINE_LOCATION))
+                    }
+                    Text(gpsStatus,style=MaterialTheme.typography.bodySmall)
+                    PreferenceSwitch("Geotag new uploads from GPS history",geotag) {
+                        geotag=it;db.set("geotag",it.toString())
+                    }
+                    Text("History stays on this phone for 30 days. A fix must be within 2 minutes of capture and accurate to 100 m. Existing photo GPS is preserved. GPS is added to a separate upload copy and shared with Google Photos; originals remain unchanged. Uploads already started keep their selected bytes.",style=MaterialTheme.typography.bodySmall)
+                    Text("Camera clock/timezone verification is not yet supported by the verified camera protocol. Match the camera clock to the phone before shooting. Photos without an EXIF timezone use the saved session timezone; an incorrect camera clock can give incorrect GPS matches.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
+                    OutlinedButton(onClick={confirmClearGps=true}) { Text("Delete recorded GPS history") }
                 } }
                 if(message.isNotEmpty()) Card(colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.errorContainer)) { Text(message,Modifier.padding(16.dp),color=MaterialTheme.colorScheme.onErrorContainer) }
                 if(rows.isNotEmpty()) {
-                    SectionTitle("Recent photos", "Latest 20 items")
-                    rows.takeLast(20).reversed().forEach { row -> ElevatedCard { Row(Modifier.fillMaxWidth().padding(14.dp),horizontalArrangement=Arrangement.SpaceBetween) { Column(Modifier.weight(1f)) { Text(row.path.substringAfterLast('/'),fontWeight=FontWeight.Medium);Text("${row.state.lowercase().replace('_',' ')} · ${row.size/1024} KiB",style=MaterialTheme.typography.bodySmall);row.error?.let { Text(it,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall) } }; StatusTag(row.state.replace('_',' '),MaterialTheme.colorScheme.secondary) } } }
+                    SectionTitle("Recent photos", "Latest 20 · Hold a pending photo to upload now, including over cellular. Battery saver still pauses transfers.")
+                    Surface(shape=MaterialTheme.shapes.medium,tonalElevation=1.dp) {
+                        Column {
+                            rows.takeLast(RecentPhotos.COUNT).reversed().forEach { row -> key(row.id) {
+                                RecentPhoto(row, row.account==db.setting("accountId"),uploadActivity[row.id],now,onPreview={ preview=row }) {
+                                    scope.launch {
+                                        withContext(Dispatchers.IO) { db.prioritize(row.id) }
+                                        UploadWorker.schedule(this@MainActivity,expedited=true)
+                                        message=if(PowerPolicy.saving(this@MainActivity)) "Photo prioritized. Upload will start after battery saver is off."
+                                            else if(!uploads) "Photo prioritized. Enable queued uploads to start."
+                                            else "Prioritized for upload now; cellular is allowed for this photo."
+                                    }
+                                }
+                            } }
+                        }
+                    }
                 }
                 HorizontalDivider()
                 OutlinedButton(onClick={startActivity(Intent(this@MainActivity,DiagnosticsActivity::class.java))},modifier=Modifier.fillMaxWidth()) { Text("Camera diagnostics & individual imports") }
                 TextButton(onClick={scope.launch { message=try { withContext(Dispatchers.IO) { val r=SystemHttp(this@MainActivity,cellular).request("GET","https://www.googleapis.com/oauth2/v3/userinfo",emptyMap(),byteArrayOf());"Google connection responded HTTP ${r.code}." } } catch(e:Exception) { e.message ?: "Connection check failed." } }},modifier=Modifier.fillMaxWidth()) { Text("Test Google connection") }
                 Text(BuildConfig.VERSION_NAME,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.outline)
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable private fun RecentPhoto(row:PhotoRow,currentAccount:Boolean,activity:String?,now:Long,onPreview:()->Unit,onUploadNow:()->Unit) {
+    val context=LocalContext.current
+    val gpsNote by produceState<String?>(null,row.id,row.state) {
+        value=withContext(Dispatchers.IO) { QueueStore.get(context).payload(row.id)?.note }
+    }
+    val thumbnail by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null,row.sha,row.local) {
+        value=withContext(Dispatchers.IO) {
+            runCatching { PhotoThumbnails.load(context,row.sha,row.local)?.asImageBitmap() }.getOrNull()
+        }
+    }
+    val pending=currentAccount && row.state in setOf("READY","UPLOADING","CREATE_PENDING","UNCERTAIN")
+    Row(Modifier.fillMaxWidth().combinedClickable(onClick=onPreview,onLongClick=if(pending) onUploadNow else null,
+        onLongClickLabel="Upload now, allowing cellular").padding(horizontal=10.dp,vertical=6.dp),
+        verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+        Surface(Modifier.size(48.dp),shape=MaterialTheme.shapes.small,color=MaterialTheme.colorScheme.surfaceVariant) {
+            val bitmap=thumbnail
+            if(bitmap!=null) Image(bitmap,contentDescription=row.path.substringAfterLast('/'),contentScale=ContentScale.Crop)
+            else Box(contentAlignment=Alignment.Center) { Text("JPEG",style=MaterialTheme.typography.labelSmall) }
+        }
+        Column(Modifier.weight(1f)) {
+            Text(row.path.substringAfterLast('/'),style=MaterialTheme.typography.bodyMedium,fontWeight=FontWeight.Medium,maxLines=1,overflow=TextOverflow.Ellipsis)
+            Text("${if(row.slot>0) "Slot ${row.slot} · " else ""}${if(row.priority>0) "Priority · " else ""}${row.state.lowercase().replace('_',' ')} · ${row.size/1024} KiB",style=MaterialTheme.typography.bodySmall)
+            activity?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.primary) }
+            if(activity==null && pending && row.retryAt>now) Text("Retry eligible in ${(row.retryAt-now+999)/1000} s",style=MaterialTheme.typography.labelSmall)
+            row.error?.let { Text(it,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall,maxLines=2,overflow=TextOverflow.Ellipsis) }
+            gpsNote?.takeUnless { it=="Geotagging off at upload start" }?.let {
+                Text(it,style=MaterialTheme.typography.labelSmall,maxLines=2,overflow=TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+@Composable private fun PhotoPopup(row:PhotoRow,onClose:()->Unit) {
+    val context=LocalContext.current
+    var loaded by remember(row.id) { mutableStateOf(false) }
+    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null,row.id) {
+        value=withContext(Dispatchers.IO) {
+            runCatching { PhotoThumbnails.load(context,row.sha,row.local,full=true)?.asImageBitmap() }.getOrNull()
+        }
+        loaded=true
+    }
+    Dialog(onDismissRequest=onClose,properties=DialogProperties(usePlatformDefaultWidth=false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha=.94f)).clickable(onClickLabel="Close image",onClick=onClose),
+            contentAlignment=Alignment.Center) {
+            val image=bitmap
+            if(image!=null) Image(image,contentDescription=row.path.substringAfterLast('/'),
+                modifier=Modifier.fillMaxSize(),contentScale=ContentScale.Fit)
+            else Text(if(loaded) "Preview unavailable. This photo may not have been imported yet." else "Loading image…",
+                color=Color.White,modifier=Modifier.padding(24.dp))
+            Text("Tap to close",color=Color.White,modifier=Modifier.align(Alignment.BottomCenter).padding(24.dp))
         }
     }
 }

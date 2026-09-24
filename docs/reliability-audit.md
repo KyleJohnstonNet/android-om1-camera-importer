@@ -105,6 +105,30 @@ creation, RPC error classification, and malformed/paginated API responses.
   coverage. Camera originals are never deleted; phone cleanup still requires a
   positive media-item confirmation.
 
+## September 23, 2026 transfer/GPS review
+
+Reviewed the adaptive transfer windows, signed helper IPC, card-slot exclusivity,
+retry and priority rules, battery-saver socket guards, preview lifetime, standby
+cycle persistence, GPS privacy and immutable upload-payload handling. Review fixes
+include preserving legacy pending destinations during slot upgrades, avoiding
+receipt reuse for different GPS payloads, bounding preview queries/retention,
+handling location-history write failures, and correcting popup image sizing.
+
+Validation: 74 JVM tests and 11 protocol-tool tests passed; 19 isolated Android
+instrumentation tests passed on the connected phone. These exercise database
+upgrades from versions 2/3/4, separate slot identities, GPS history bounds/deletion,
+GPS metadata round-trip, unchanged original bytes and image pixels, frozen retry
+payloads, and confirmation-gated copy cleanup. Both APK builds and lint passed.
+The new legacy-destination regression first failed against the preceding APK and
+passed after rebuilding with its fix. Test APK cleanup was disabled and user data
+was retained. GPS/location permission was not granted or enabled by testing.
+
+Physical dual-slot imports at ten-way concurrency, repeated real switch cycles,
+GPS recording during a hike, and live network-loss/battery-saver fault injection
+still need field acceptance. Automatic clock readback/correction is explicitly
+deferred at the user's request; the known setter alone cannot establish historic
+photo offsets. Screenshots and device-specific information stay outside the repo.
+
 ## Contract references
 
 - [Android persistent and expedited work](https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work): scheduling uses WorkManager rather than assuming a background broadcast can start a foreground service.

@@ -10,6 +10,8 @@ object CameraBridge {
     const val LIST_DIRECTORY = 2
     const val DOWNLOAD_JPEG = 3
     const val RELEASE = 4
+    const val STATUS = 5
+    const val CARD_SLOT = 6
     const val MAX_RESPONSE_BYTES = 32 * 1024
     const val MAX_REPORT_CHARS = 160 * 1024
 }

@@ -10,6 +10,7 @@ class CameraReadyReceiver: BroadcastReceiver() {
         val db=QueueStore.get(context)
         val session=db.savedSession() ?: return
         if(db.setting("cameraPaused")=="true" || intent.getStringExtra("sessionId")!=session.id) return
+        ImportService.status.value="Camera is ready. Import queued; waiting for Android to start the worker."
         runCatching { ImportWorker.schedule(context,session.id) }
             .onFailure {
                 ImportService.status.value="Automatic import could not start. Open the importer and tap Sync this session now."

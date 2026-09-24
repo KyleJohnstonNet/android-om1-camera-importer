@@ -145,3 +145,17 @@ closes the GATT link. The helper retains its existing VPN exclusion.
 Bluetooth wake and original transfer have been exercised on hardware. This does
 not establish simultaneous physical shooting or compatibility across firmware.
 See [standby transfer](between-shooting-transfer.md) for the controller-off path.
+
+## Additional verified scope and clock limitation (September 2026)
+
+The captured OM-1 command list advertises `get_playtargetslot` and
+`set_playtargetslot?targetslot=1|2`. The client verifies `<targetslot>` after each
+selection and serializes selection/listing against JPEG downloads.
+
+The list also advertises `set_utctimediff?utctime=...&diff=...`; observed client
+wire construction uses UTC `yyyyMMdd'T'HHmmss` and a URL-encoded `±HHmm` offset.
+This establishes a setter only. No current-camera clock and timezone readback
+has been verified. Neither a photo's timestamp nor an unvalidated HTTP Date header
+establishes the current clock's drift/timezone. Automatic calibration, clock changes,
+and a correction popup are deliberately not implemented until readback can be
+validated. Existing-photo timing must be mapped before any future clock change.

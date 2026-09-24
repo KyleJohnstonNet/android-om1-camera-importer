@@ -20,7 +20,32 @@ import java.io.File
 import java.security.MessageDigest
 
 object CameraHttp {
+    private fun slotRequest(context:Context,network:Network,url:String):String {
+        validate(context,network)
+        val conn=connection(network,url)
+        val guard=PowerPolicy.guard(context,conn)
+        try {
+            check(conn.responseCode==200) { "Camera card-slot request failed (HTTP ${conn.responseCode})." }
+            return conn.inputStream.use { input ->
+                val bytes=ByteArrayOutputStream();val buffer=ByteArray(1024)
+                while(true) {
+                    PowerPolicy.check(context)
+                    val count=input.read(buffer);if(count<0) break
+                    check(bytes.size()+count<=4096) { "Camera slot response too large." }
+                    bytes.write(buffer,0,count)
+                }
+                bytes.toString("UTF-8")
+            }
+        } finally { guard.close();conn.disconnect() }
+    }
+    fun currentSlot(context:Context,network:Network):Int =
+        dev.om1.importer.core.CameraSlots.parse(slotRequest(context,network,dev.om1.importer.core.CameraSlots.currentUrl()))
+    fun selectSlot(context:Context,network:Network,slot:Int):Int {
+        slotRequest(context,network,dev.om1.importer.core.CameraSlots.selectUrl(slot))
+        return currentSlot(context,network).also { check(it==slot) { "Card slot $slot is unavailable or the camera did not select it." } }
+    }
     private fun validate(context: Context, network: Network) {
+        PowerPolicy.check(context)
         val manager = context.getSystemService(ConnectivityManager::class.java)
         val caps = manager.getNetworkCapabilities(network)
         check(caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
@@ -34,10 +59,13 @@ object CameraHttp {
         validate(context, network)
         val responses = JSONArray()
         for (path in CameraEndpoints.paths) {
+            PowerPolicy.check(context)
             val result = JSONObject().put("endpoint", path)
             var connection: HttpURLConnection? = null
+            var guard:AutoCloseable?=null
             try {
                 connection = network.openConnection(URL(CameraEndpoints.url(path)), Proxy.NO_PROXY) as HttpURLConnection
+                guard=PowerPolicy.guard(context,connection)
                 connection.requestMethod = "GET"
                 connection.instanceFollowRedirects = false
                 connection.connectTimeout = 5000
@@ -61,7 +89,7 @@ object CameraHttp {
             } catch (e: Exception) {
                 // Never echo URLs or server-provided exception messages over IPC.
                 result.put("error", e.javaClass.simpleName)
-            } finally { connection?.disconnect() }
+            } finally { guard?.close();connection?.disconnect() }
             responses.put(result)
         }
         return JSONObject().put("schemaVersion",1).put("transport","camera_helper")
@@ -82,6 +110,7 @@ object CameraHttp {
         require(offset in 0..10000) { "Invalid camera listing page." }
         validate(context,network)
         val conn=connection(network,CameraFiles.listingUrl(directory))
+        val guard=PowerPolicy.guard(context,conn)
         try {
             val status=conn.responseCode
             check(status==200) { "Camera listing returned HTTP $status. Camera mode may not permit browsing." }
@@ -90,6 +119,7 @@ object CameraHttp {
             conn.inputStream.use { input ->
                 val buffer=ByteArray(8192)
                 while(true) {
+                    PowerPolicy.check(context)
                     check(android.os.SystemClock.elapsedRealtime()<deadline) { "Camera listing timed out." }
                     val count=input.read(buffer)
                     if(count<0) break
@@ -108,13 +138,14 @@ object CameraHttp {
                 .put("truncated",entries.size>page.size).put("entries",JSONArray().apply {
                     page.forEach { put(JSONObject().put("path",it.path).put("size",it.size).put("directory",it.directory).put("stamp",it.stamp)) }
                 }).toString()
-        } finally { conn.disconnect() }
+        } finally { guard.close();conn.disconnect() }
     }
 
-    fun download(context: Context, network: Network, path: String, expected: Long): Pair<File,String> {
+    fun download(context: Context, network: Network, path: String, expected: Long,progress:(Long)->Unit = {}): Pair<File,String> {
         validate(context,network)
         require(expected in 1..CameraFiles.MAX_JPEG_BYTES)
         val conn=connection(network,CameraFiles.originalUrl(path))
+        val guard=PowerPolicy.guard(context,conn)
         val file=File.createTempFile("camera-", ".part", context.cacheDir)
         try {
             check(conn.responseCode==200) { "Camera JPEG request failed." }
@@ -123,15 +154,19 @@ object CameraHttp {
             val deadline=android.os.SystemClock.elapsedRealtime()+120000
             val digest=MessageDigest.getInstance("SHA-256")
             var count=0L
+            var reportedAt=0L
             conn.inputStream.use { input -> file.outputStream().use { output ->
                 val buffer=ByteArray(64*1024)
                 while(true) {
+                    PowerPolicy.check(context)
                     check(android.os.SystemClock.elapsedRealtime()<deadline) { "Camera transfer timed out." }
                     val n=input.read(buffer)
                     if(n<0) break
                     count+=n
                     check(count<=expected && count<=CameraFiles.MAX_JPEG_BYTES) { "Camera file exceeds expected size." }
                     digest.update(buffer,0,n); output.write(buffer,0,n)
+                    val now=android.os.SystemClock.elapsedRealtime()
+                    if(now-reportedAt>=1000 || count==expected) { progress(count);reportedAt=now }
                 }
                 output.fd.sync()
             } }
@@ -140,6 +175,6 @@ object CameraHttp {
             val sha=digest.digest().joinToString("") { "%02x".format(it) }
             return file to JSONObject().put("path",path).put("bytes",count).put("sha256",sha).toString()
         } catch(e:Exception) { file.delete(); throw e }
-        finally { conn.disconnect() }
+        finally { guard.close();conn.disconnect() }
     }
 }

@@ -15,7 +15,7 @@ data class CloudResponse(val code:Int,val headers:Map<String,String>,val body:By
 fun interface CloudTransport { fun request(method:String,url:String,headers:Map<String,String>,body:ByteArray):CloudResponse }
 
 /** Uses Android’s default routing, including the system VPN and lockdown policy. */
-class SystemHttp(private val context:Context,private val cellular:Boolean):CloudTransport {
+class SystemHttp(private val context:Context,private val cellular:Boolean,private val photoId:String?=null):CloudTransport {
     companion object {
         fun validateUrl(url:String) {
             val uri=URI(url)
@@ -25,18 +25,32 @@ class SystemHttp(private val context:Context,private val cellular:Boolean):Cloud
     }
     override fun request(method:String,url:String,headers:Map<String,String>,body:ByteArray):CloudResponse {
         validateUrl(url)
+        PowerPolicy.check(context)
+        val db=QueueStore.get(context)
+        val photo=photoId?.let { db.rows("id=?",arrayOf(it)).singleOrNull() }
+        val forced=photo!=null && photo.priority>0
+        if(photoId!=null) check(photo?.account==db.setting("accountId")) { "Google account changed. Upload paused." }
+        if(photoId!=null) check(db.setting("uploadsEnabled","true")=="true") { "Uploads paused." }
         val manager=context.getSystemService(ConnectivityManager::class.java)
         val network=manager.activeNetwork ?: throw NetworkUnavailable("Waiting for an internet connection.")
         val caps=manager.getNetworkCapabilities(network)
-        if(QueueStore.get(context).setting("cellular",cellular.toString())!="true" && (caps==null || caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) || !caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)))
+        if(!forced && db.setting("cellular",cellular.toString())!="true" && (caps==null || caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) || !caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)))
             throw NetworkUnavailable("Waiting for Wi-Fi. Cellular uploads are disabled.")
         // Do not bind the process, DNS, or sockets to a physical network or a VPN.
         val connection=URL(url).openConnection() as HttpURLConnection
+        val guard=PowerPolicy.guard(context,connection)
         try {
             connection.requestMethod=method;connection.instanceFollowRedirects=false;connection.connectTimeout=15000;connection.readTimeout=30000
             connection.useCaches=false
             headers.forEach { (k,v)->connection.setRequestProperty(k,v) }
-            if(method=="POST") { connection.doOutput=true;connection.setFixedLengthStreamingMode(body.size);connection.outputStream.use { it.write(body) } }
+            if(method=="POST") { connection.doOutput=true;connection.setFixedLengthStreamingMode(body.size);connection.outputStream.use { output ->
+                var offset=0
+                while(offset<body.size) {
+                    PowerPolicy.check(context)
+                    val count=minOf(8192,body.size-offset)
+                    output.write(body,offset,count);offset+=count
+                }
+            } }
             val code=connection.responseCode
             val input=if(code in 200..299) connection.inputStream else connection.errorStream
             val bytes=input?.use { stream ->
@@ -45,6 +59,6 @@ class SystemHttp(private val context:Context,private val cellular:Boolean):Cloud
                 output.toByteArray()
             } ?: byteArrayOf()
             return CloudResponse(code,connection.headerFields.filterKeys { it!=null }.mapKeys { it.key.lowercase() }.mapValues { it.value.joinToString(",") },bytes)
-        } finally { connection.disconnect() }
+        } finally { guard.close();connection.disconnect() }
     }
 }

@@ -47,10 +47,13 @@ verifies the helper certificate and binds an explicit component. Reply IDs and
 timeouts prevent stale replies from satisfying later requests.
 
 Operations expose capability queries, bounded DCF directory listings, original
-JPEG download and connection release. They accept no arbitrary URL, socket, local
+JPEG download, status, card-slot query/selection and connection release. They accept no arbitrary URL, socket, local
 path or cloud token. Camera HTTP binds to the helper-owned camera network and uses
 the fixed camera host; redirects, proxies and internet-route fallback are disabled.
-Directory responses and JPEG sizes are bounded. Camera operations are serialized.
+Directory responses and JPEG sizes are bounded. Listings and slot changes are
+exclusive; JPEG downloads permit up to ten concurrent requests on the selected
+slot, driven by the importer's adaptive throughput controller. Battery saver
+rejects new camera operations and disconnects in-flight transfers.
 
 The helper returns a read-only file descriptor and unlinks its temporary copy.
 The importer checks size, SHA-256 and JPEG dimensions before finalizing a private

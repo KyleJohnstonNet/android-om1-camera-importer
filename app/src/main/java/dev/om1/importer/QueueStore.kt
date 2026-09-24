@@ -11,11 +11,12 @@ import dev.om1.importer.core.CameraTimestamp
 import dev.om1.importer.core.SessionWindow
 
 /** Transactional app-private queue. Account/destination and discovery time never change on retry. */
-class QueueStore internal constructor(context: Context, name: String = "import-queue.db"): SQLiteOpenHelper(context,name,null,2) {
+class QueueStore internal constructor(context: Context, name: String = "import-queue.db"): SQLiteOpenHelper(context,name,null,5) {
     companion object {
         @Volatile private var instance: QueueStore?=null
         fun get(context: Context)=instance ?: synchronized(this) { instance ?: QueueStore(context.applicationContext).also { instance=it } }
         fun digest(value: String)=MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
+        fun photoId(camera:String,p:SourcePhoto)=digest(dev.om1.importer.core.CameraSlots.photoIdentity(camera,p.path,p.size,p.stamp,p.slot))
     }
     val changes=MutableStateFlow(0L)
     override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
@@ -25,12 +26,21 @@ class QueueStore internal constructor(context: Context, name: String = "import-q
             size INTEGER NOT NULL, stamp TEXT NOT NULL, discovered INTEGER NOT NULL,
             account TEXT NOT NULL, album TEXT, state TEXT NOT NULL, local TEXT, sha TEXT,
             upload_url TEXT, upload_token TEXT, granularity INTEGER NOT NULL DEFAULT 262144,
-            media_id TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0, retry_at INTEGER NOT NULL DEFAULT 0)""")
+            media_id TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0, retry_at INTEGER NOT NULL DEFAULT 0,
+            priority INTEGER NOT NULL DEFAULT 0, slot INTEGER NOT NULL DEFAULT 0)""")
         db.execSQL("CREATE INDEX photo_state ON photos(state,discovered)")
+        createGeoTables(db)
+    }
+    private fun createGeoTables(db:SQLiteDatabase) {
+        db.execSQL("CREATE TABLE capture_times (id TEXT PRIMARY KEY, captured_at INTEGER, zone TEXT NOT NULL)")
+        db.execSQL("CREATE TABLE upload_payloads (id TEXT PRIMARY KEY, file TEXT, size INTEGER NOT NULL, sha TEXT NOT NULL, note TEXT NOT NULL)")
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         // Sessions are settings JSON, so v1 data needs no destructive migration.
-        require(oldVersion == 1 && newVersion == 2) { "Unsupported queue upgrade; preserve existing database." }
+        require(oldVersion in 1..4 && newVersion == 5) { "Unsupported queue upgrade; preserve existing database." }
+        if(oldVersion<3) db.execSQL("ALTER TABLE photos ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
+        if(oldVersion<4) db.execSQL("ALTER TABLE photos ADD COLUMN slot INTEGER NOT NULL DEFAULT 0")
+        createGeoTables(db)
     }
     @Synchronized fun setting(key: String, fallback: String=""): String = readableDatabase.rawQuery("SELECT value FROM settings WHERE key=?",arrayOf(key)).use { if(it.moveToFirst()) it.getString(0) else fallback }
     @Synchronized fun set(key: String,value: String) { writableDatabase.insertWithOnConflict("settings",null,ContentValues().apply { put("key",key);put("value",value) },SQLiteDatabase.CONFLICT_REPLACE); changed() }
@@ -74,6 +84,12 @@ class QueueStore internal constructor(context: Context, name: String = "import-q
         val now=System.currentTimeMillis(); val db=writableDatabase; db.beginTransaction()
         try {
             if(session.camera==null) set("session",session.copy(camera=camera).json().toString())
+            // Freeze every listed photo, including future backfills, before any later clock change.
+            dated.forEach { (photo,time) ->
+                db.insertWithOnConflict("capture_times",null,ContentValues().apply {
+                    put("id",photoId(camera,photo));put("captured_at",time);put("zone",session.zone)
+                },SQLiteDatabase.CONFLICT_IGNORE)
+            }
             matched.forEach {
                 val account=session.account
                 val album=session.album
@@ -82,16 +98,18 @@ class QueueStore internal constructor(context: Context, name: String = "import-q
                 // but must never reroute an actual queued or uploaded photo.
                 db.update("photos",ContentValues().apply {
                     put("state","DISCOVERED");put("discovered",now);put("account",account);put("album",album)
-                },"id=? AND state='BASELINE'",arrayOf(digest("$camera\u0000${it.path}\u0000${it.size}\u0000${it.stamp}")))
+                },"id=? AND state='BASELINE'",arrayOf(photoId(camera,it)))
+                if(it.slot!=0) db.execSQL("UPDATE photos SET state='BASELINE' WHERE camera=? AND path=? AND size=? AND stamp=? AND slot=0 AND state='DISCOVERED' AND account=? AND album IS ?",
+                    arrayOf<Any?>(camera,it.path,it.size,it.stamp,account,album))
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         changed(); return DiscoveryResult(files.size,matched.size,dated.count { it.second==null },
-            matched.map { digest("$camera\u0000${it.path}\u0000${it.size}\u0000${it.stamp}") }.toSet())
+            matched.map { photoId(camera,it) }.toSet())
     }
     private fun insert(camera: String,p: SourcePhoto,time: Long,account: String,album: String?,state: String) {
         writableDatabase.insertWithOnConflict("photos",null,ContentValues().apply {
-            put("id",digest("$camera\u0000${p.path}\u0000${p.size}\u0000${p.stamp}"));put("camera",camera);put("path",p.path)
+            put("id",photoId(camera,p));put("camera",camera);put("path",p.path);put("slot",p.slot)
             put("size",p.size);put("stamp",p.stamp);put("discovered",time);put("account",account);put("album",album);put("state",state)
         },SQLiteDatabase.CONFLICT_IGNORE)
     }
@@ -99,16 +117,33 @@ class QueueStore internal constructor(context: Context, name: String = "import-q
         buildList { while(c.moveToNext()) {
             fun s(name:String): String?=c.getColumnIndexOrThrow(name).let { if(c.isNull(it)) null else c.getString(it) }
             add(PhotoRow(s("id")!!,s("camera")!!,s("path")!!,s("size")!!.toLong(),s("stamp")!!,s("account")!!,s("album"),s("state")!!,
-                s("local"),s("sha"),s("upload_url"),s("upload_token"),s("granularity")!!.toInt(),s("media_id"),s("error"),s("attempts")!!.toInt(),s("retry_at")!!.toLong()))
+                s("local"),s("sha"),s("upload_url"),s("upload_token"),s("granularity")!!.toInt(),s("media_id"),s("error"),s("attempts")!!.toInt(),s("retry_at")!!.toLong(),s("priority")!!.toLong(),s("slot")!!.toInt()))
         } }
     }
     @Synchronized fun update(id:String,vararg values: Pair<String,Any?>) {
-        val allowed=setOf("state","local","sha","upload_url","upload_token","granularity","media_id","error","attempts","retry_at")
+        val allowed=setOf("state","local","sha","upload_url","upload_token","granularity","media_id","error","attempts","retry_at","priority")
         writableDatabase.update("photos",ContentValues().apply { values.forEach { (k,v) -> require(k in allowed); when(v) { null->putNull(k);is Long->put(k,v);is Int->put(k,v);else->put(k,v.toString()) } } },"id=?",arrayOf(id));changed()
     }
     @Synchronized fun recover() {
         // A process death during batchCreate has an unknown server outcome: do not blindly create again.
         writableDatabase.execSQL("UPDATE photos SET state='UNCERTAIN', error='Upload creation was interrupted. Reconcile before retrying.' WHERE state='CREATING'")
+        changed()
+    }
+    @Synchronized fun prioritize(id:String) {
+        val row=rows("id=?",arrayOf(id)).singleOrNull() ?: return
+        if(row.account!=setting("accountId") || row.state !in setOf("READY","UPLOADING","CREATE_PENDING","UNCERTAIN")) return
+        update(id,"priority" to System.currentTimeMillis(),"retry_at" to 0L,"error" to null)
+    }
+    @Synchronized fun reuseConfirmedReceipt(id:String) {
+        val row=rows("id=?",arrayOf(id)).single()
+        // GPS copies may intentionally differ despite identical camera bytes.
+        if(setting("geotag")=="true" || row.sha==null || row.account.isBlank() || row.state!="READY") return
+        val match=rows("sha=? AND account=? AND state='UPLOADED' AND media_id IS NOT NULL",arrayOf(row.sha,row.account))
+            .firstOrNull { it.album==row.album && !it.mediaId.isNullOrBlank() && payload(it.id)?.file==null } ?: return
+        update(id,"state" to "UPLOADED","media_id" to match.mediaId)
+    }
+    @Synchronized fun retryNetwork() {
+        writableDatabase.execSQL("UPDATE photos SET retry_at=0 WHERE error LIKE 'Network interrupted.%' OR error LIKE 'Waiting for %' OR error LIKE 'Battery saver%'")
         changed()
     }
     @Synchronized fun assignUnassigned(account:String) {
@@ -119,8 +154,26 @@ class QueueStore internal constructor(context: Context, name: String = "import-q
             db.setTransactionSuccessful()
         } finally { db.endTransaction() };changed()
     }
+    @Synchronized fun captureTime(id:String):Pair<Long?,String>? = readableDatabase.rawQuery(
+        "SELECT captured_at,zone FROM capture_times WHERE id=?",arrayOf(id)).use {
+        if(it.moveToFirst()) (if(it.isNull(0)) null else it.getLong(0)) to it.getString(1) else null
+    }
+    @Synchronized fun recentHashes():List<String?> = readableDatabase.rawQuery(
+        "SELECT sha FROM photos WHERE state != 'BASELINE' ORDER BY discovered DESC,id DESC LIMIT ${dev.om1.importer.core.RecentPhotos.COUNT}",null).use { c ->
+        buildList { while(c.moveToNext()) add(if(c.isNull(0)) null else c.getString(0)) }
+    }
+    @Synchronized fun payload(id:String):PreparedPayload? = readableDatabase.rawQuery(
+        "SELECT file,size,sha,note FROM upload_payloads WHERE id=?",arrayOf(id)).use {
+        if(it.moveToFirst()) PreparedPayload(if(it.isNull(0)) null else it.getString(0),it.getLong(1),it.getString(2),it.getString(3)) else null
+    }
+    @Synchronized fun savePayload(id:String,payload:PreparedPayload) {
+        check(this.payload(id)==null) { "Upload bytes are already frozen." }
+        writableDatabase.insertOrThrow("upload_payloads",null,ContentValues().apply {
+            put("id",id);put("file",payload.file);put("size",payload.size);put("sha",payload.sha);put("note",payload.note)
+        });changed()
+    }
 }
 data class DiscoveryResult(val total:Int,val matched:Int,val invalidTimestamps:Int,val ids:Set<String>)
-data class SourcePhoto(val path:String,val size:Long,val stamp:String)
+data class SourcePhoto(val path:String,val size:Long,val stamp:String,val slot:Int=0)
 data class PhotoRow(val id:String,val camera:String,val path:String,val size:Long,val stamp:String,val account:String,val album:String?,val state:String,
-    val local:String?,val sha:String?,val uploadUrl:String?,val uploadToken:String?,val granularity:Int,val mediaId:String?,val error:String?,val attempts:Int,val retryAt:Long)
+    val local:String?,val sha:String?,val uploadUrl:String?,val uploadToken:String?,val granularity:Int,val mediaId:String?,val error:String?,val attempts:Int,val retryAt:Long,val priority:Long=0,val slot:Int=0)

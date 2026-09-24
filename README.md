@@ -26,8 +26,55 @@ verification work, including newly shot photos and local duplicate handling.
   on the system route; exclude **only Camera Link** from your VPN if needed.
 - Sessions have explicit local start and end times. Their chosen album is frozen, and a past window can backfill every JPEG whose camera capture time falls in that interval.
 - With saved Bluetooth details and Power-off Standby enabled, Camera Link watches for standby advertisements, reconnects, and schedules sync. It persists unfinished collection across restarts. The advertisement's relationship to the physical switch and actual phone reboot recovery still need controlled validation.
+- Both apps show the live camera phase, including Bluetooth scanning, the pause
+  between scans, wake/connection steps and per-file transfer progress. Timed phases
+  show a countdown; Camera Link's foreground notification follows the same status.
+  Importer also shows upload progress, its adaptive limit and automatic retry waits.
+- Camera imports scan both SD card slots, keeping directory scans and slot
+  switches serial. Each queue entry records its source slot. The previous playback
+  slot is restored afterward when the camera remains reachable.
+- Camera downloads share the upload throughput controller: start at two, grow
+  up to ten, keep extra concurrency only when throughput improves, and back off
+  on stalls or failures. Failed transfers drain before serial retries. Actual
+  speedup depends on the camera's Wi-Fi server.
 - A durable queue resumes uploads and freezes the account and session album at discovery.
+- Upload concurrency adapts from one to eight photos, starting at three. It measures
+  acknowledged photo bytes in 10-second windows and tries one additional slot at
+  a time, keeping it when total throughput improves by at least 10%. Stalls,
+  network errors and server throttling reduce concurrency; unsuccessful probes
+  wait 30 seconds before trying again. A new network starts learning afresh.
+  No separate speed-test traffic is sent. An explicit upload-now request can use
+  one extra slot. Network failures retry after 10 seconds,
+  and a restored internet connection wakes the queue. Android background scheduling
+  may delay these wakeups.
+- Hold an imported pending photo in Recent photos to prioritize it immediately.
+  This permits cellular data for that photo only and reserves an extra upload slot.
+  The global upload pause and battery saver still apply.
+- Battery saver pauses camera collection and cloud transfers in both apps; automatic
+  monitoring and uploads resume when it is disabled.
+- Tap a recent photo to open a screen-width preview; tap again to close. Originals
+  are used when available, with retained previews used after original cleanup.
+  Previews are retained only for the 20 displayed recent rows and pruned as rows
+  leave that list. Older photos whose originals were already removed may show a placeholder.
 - Camera originals are never deleted. Phone copies are removed only after confirmed upload.
+- After a successful standby collection, a persisted gate requires a new observed
+  standby → powered → standby cycle before another automatic wake. Our own powered
+  controller is ignored until a standby baseline is observed. One final collection
+  is allowed after the session ends; failed scans retry with a 30-second to 15-minute
+  backoff. Sync now bypasses the gate. Bluetooth controller state is not a definitive
+  physical-switch signal, so very brief/unobserved shooting cycles may need Sync now.
+- Optional GPS recording and geotagging have independent default-off toggles.
+  Recording uses a visible location service, pauses for battery saver, and keeps
+  30 days of phone-local history. It resumes an enabled recorder when the app opens,
+  not from boot/background starts. Geotagging preserves existing GPS and requires
+  a fix within two minutes of capture with accuracy at most 100 metres. It creates
+  a separate JPEG upload copy without recompressing pixels; originals are unchanged.
+  Retry payloads are frozen before upload and cleaned only after cloud confirmation.
+  **Limitation:** automatic camera clock/timezone readback and correction remain
+  unimplemented. EXIF timezone is used when present, otherwise the pinned session
+  timezone. Verify the camera clock before using GPS matching. The verified OM-1
+  command list exposes a clock setter but no verified clock/timezone getter; resetting
+  blindly would lose the offset needed to correct existing photos.
 - Cloud requests respect system VPN routing and lockdown; a VPN is not required by the app.
 
 [Google Photos setup](docs/google-photos-setup.md) covers the required Cloud project

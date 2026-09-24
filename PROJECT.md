@@ -38,5 +38,15 @@ troubleshooting and individual device inventories are not kept in public notes.
 See docs/development-history.md, docs/preview-queue.md and
 docs/between-shooting-transfer.md for sanitized findings and limitations.
 
+September 23 development: adaptive uploads (up to eight plus a priority slot),
+automatic network retries, battery-saver transfer guards, detailed live status,
+dual-card scanning, adaptive camera downloads up to ten, compact recent previews
+and tap-to-open popup, persisted standby-cycle suppression, and independent opt-in
+GPS recording/geotagging are implemented. GPS upload copies preserve originals
+and freeze retry bytes. Clock readback/calibration and automatic correction remain
+pending (explicitly deferred by the user) until a camera time/timezone read protocol is verified: the captured command
+list only establishes `set_utctimediff`, not a getter. Do not silently reset the
+camera or claim old-photo offsets can be recovered from the newest JPEG timestamp.
+
 Public privacy and terms documents are provided in PRIVACY.md and TERMS.md,
 linked from the README. Their publication does not establish Google verification.

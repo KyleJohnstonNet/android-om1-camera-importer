@@ -162,8 +162,11 @@ sequenceDiagram
 
 The Bluetooth trigger deserves particular care. The code currently treats a
 cleared controller-power bit in a recognized advertisement from the saved camera
-as Power-off Standby. It does not directly read the physical switch, and it does
-not require an observed ON-to-OFF transition. The protocol notes distinguish
+as Power-off Standby. It does not directly read the physical switch. After a
+successful collection, a persisted gate requires standby (to settle our own wake),
+then powered, then standby again. Continued standby cannot repeatedly wake Wi-Fi.
+A final post-cutoff scan bypasses this gate; failures retry with increasing delays
+up to 15 minutes. Manual Sync can always request a fresh check. The protocol notes distinguish
 controller power from transfer readiness. This interpretation still needs a
 controlled switch-cycle test; it should not yet be described as proven physical
 power-switch detection.
@@ -225,12 +228,22 @@ camera transfer retries the incomplete photo; it does not have the same resumabl
 byte-offset mechanism as the cloud upload. If cloud media creation has an ambiguous
 outcome, the app retains the original and checks legacy reconciliation markers.
 If no positive receipt is found, it verifies and retries the identical original.
+When optional geotagging is enabled, a separate GPS-enriched upload copy replaces
+the original as the immutable retry payload; the imported original is unchanged.
 Google documents that identical bytes uploaded again return the same media item
 ID, even with a different upload token. New uploads no longer put programmatic
 markers in user-facing descriptions. See Google's
 [upload and creation contract](https://developers.google.com/photos/library/guides/upload-media).
 
 ## What persistence currently means
+
+Phone GPS recording and geotagging have independent default-off controls. The
+recorder needs precise location permission and a visible foreground service,
+pauses in battery saver, and retains 30 days of local history. Geotagging uses
+EXIF capture time/offset when available (otherwise the pinned session timezone),
+with a recorded fix within two minutes and 100 m reported accuracy. Existing GPS
+is never overwritten. Clock readback/calibration remains unverified and is not
+automatically performed; users must verify camera time before relying on matches.
 
 | Event | Current behavior and its limits |
 | --- | --- |

@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Effective date: September 7, 2026
+Effective date: September 23, 2026
 
 This policy covers OM-1 Importer (also described as OM-1 Photo Uploader) and
 OM-1 Camera Link, maintained through the
@@ -17,6 +17,12 @@ handle data differently.
 - **Photographs:** The importer copies selected or session-discovered JPEGs from
   the camera and stores originals on the phone. Original embedded metadata, which
   may include capture time or location, is preserved with the file.
+- **Optional phone GPS:** Recording is off by default and requires precise location
+  permission. When enabled, a foreground service records timestamped positions and
+  accuracy in private local storage. It pauses in battery saver. Geotagging is a
+  separate, default-off setting: it adds a nearby capture-time GPS fix to an upload
+  copy only when the photo has no GPS. This location becomes part of the photo sent
+  to Google Photos. The camera and imported original bytes are not modified.
 - **Google account information:** When you connect Google Photos, Google Play
   services handles authorization. The importer uses your Google account identifier
   and email address to display the account and keep uploads assigned to it.
@@ -26,8 +32,8 @@ handle data differently.
   to browse your entire existing Photos library.
 - **Transfer records:** Local records include image paths, sizes, hashes, discovery
   times, account and album assignments, upload progress, errors and Google media
-  identifiers. An app-specific import marker is included in the uploaded item's
-  description to help identify a previously completed upload.
+  identifiers. Legacy uploaded items may contain an app-specific import marker in
+  their descriptions; new uploads do not add that marker.
 
 Notifications show connection or import progress. Local diagnostics can include
 operation times, device/software information, file names and errors. The apps do
@@ -43,8 +49,8 @@ queue metadata are not separately encrypted by the app. Android app backup is
 disabled. Google authorization is managed through Google Play services, and the
 importer uses access tokens in memory for requests.
 
-When uploads are enabled and Google access is authorized, original JPEG bytes,
-file names, embedded metadata and the import marker are sent directly to Google
+When uploads are enabled and Google access is authorized, JPEG bytes (a GPS-enriched
+copy when opted in), file names and embedded metadata are sent directly to Google
 Photos in the assigned account and destination. Google requests use HTTPS and
 Android's normal network routing, including system VPN settings. Camera transfers
 use the camera's local Wi-Fi protocol. Camera Link may need a separate VPN exclusion.
@@ -64,7 +70,18 @@ under its own [Privacy Policy](https://policies.google.com/privacy).
 You can pause imports or uploads and choose whether to remove phone copies after
 confirmed Google Photos creation. Unconfirmed or ambiguous uploads retain their
 local originals. The apps never delete camera originals. Queue/receipt metadata
-can remain after an uploaded local copy is removed.
+can remain after an uploaded local copy is removed. Small local thumbnails are
+also retained for the 20 displayed recent photos after their full-size originals
+are removed, and deleted when no displayed recent photo needs them.
+
+GPS history is pruned after 30 days when the app next runs or records/uses a fix.
+You can stop recording, disable geotagging, or delete recorded GPS history separately
+in Photo locations. Deleting history cannot remove GPS from prepared uploads or
+photos already sent to Google. Upload bytes, including any GPS, are frozen before
+upload starts and retained across retries; changing the toggle affects new uploads.
+Temporary GPS upload copies are removed after confirmed cloud creation. Recording
+does not restart after a reboot/process stop until you reopen the app. Location
+coordinates are not written to diagnostic reports or sent to a project server.
 
 Use **Forget camera** in Camera Link to remove its saved connection profile and
 key. Clear storage for each app or uninstall it to remove that app's private local
