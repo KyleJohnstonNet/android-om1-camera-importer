@@ -28,7 +28,7 @@ class DiagnosticsActivity : ComponentActivity() {
         enableEdgeToEdge()
         lifecycleScope.launch {
             withContext(Dispatchers.IO) { DiagnosticLog.initialize(this@DiagnosticsActivity) }
-            setContent { MaterialTheme { Screen() } }
+            setContent { ImporterTheme { Screen() } }
         }
     }
     private fun vpnStatus(): String {

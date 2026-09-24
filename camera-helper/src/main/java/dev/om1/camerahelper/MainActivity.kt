@@ -21,6 +21,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -36,7 +39,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { MaterialTheme { Screen() } }
+        setContent { CameraLinkTheme { Screen() } }
     }
     @Composable private fun Screen() {
         val wifi = remember { CameraSession.wifi(this) }
@@ -142,52 +145,33 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (_: Exception) { wifi.status.value="QR code not recognized. Scan the camera’s Wi-Fi setup code." }
         }
-        Scaffold { padding ->
-            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(24.dp),
-                verticalArrangement=Arrangement.spacedBy(16.dp)) {
-                Text("OM-1 Camera Link",style=MaterialTheme.typography.headlineMedium)
-                Text("Camera-only helper · ${BuildConfig.VERSION_NAME}")
-                Card { Text("If your VPN blocks camera access, exclude only OM-1 Camera Link using its split-tunnel settings. Keep your regular internet connection available.",Modifier.padding(16.dp)) }
-                Text("This helper handles the camera connection. OM-1 Importer manages sessions and Google Photos uploads.")
-                Button(enabled=!active && profileLoaded,onClick={ scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                    .setCaptureActivity(CameraQrActivity::class.java).setPrompt("Scan the Wi-Fi QR code on your OM camera")
-                    .setBeepEnabled(false).setBarcodeImageEnabled(false)) }) { Text("Scan camera Wi-Fi QR code") }
-                OutlinedTextField(ssid,{ssid=it; bluetoothName=null; bluetoothPassword=null},enabled=!active && profileLoaded,label={Text("Camera Wi-Fi name (SSID)")},singleLine=true,modifier=Modifier.fillMaxWidth())
-                OutlinedTextField(password,{password=it; bluetoothName=null; bluetoothPassword=null},enabled=!active && profileLoaded,label={Text("Camera Wi-Fi password")},singleLine=true,
-                    visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),modifier=Modifier.fillMaxWidth())
-                Row(horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-                    FilterChip(wpa3,{wpa3=true},enabled=!active && profileLoaded,label={Text("WPA3")})
-                    FilterChip(!wpa3,{wpa3=false},enabled=!active && profileLoaded,label={Text("WPA2")})
+        Scaffold(containerColor=MaterialTheme.colorScheme.background) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal=20.dp,vertical=18.dp), verticalArrangement=Arrangement.spacedBy(16.dp)) {
+                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
+                    Column { Text("OM-1 Camera Link",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text("Your camera connection companion",style=MaterialTheme.typography.bodyLarge) }
+                    CameraStateTag(if(active) "CONNECTED" else "OFFLINE",if(active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary)
                 }
-                if(bluetoothName!=null) Row(horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-                    Checkbox(wakeBluetooth,{wakeBluetooth=it},enabled=!active)
-                    Text("Start camera Wi-Fi using Bluetooth")
-                }
-                Button(enabled=profileLoaded && (active || (ssid.isNotBlank() && password.isNotEmpty())),onClick={
-                    if (active) {
-                        startService(Intent(this@MainActivity,CameraService::class.java).setAction("stop"))
-                    } else if (required.all { checkSelfPermission(it)==PackageManager.PERMISSION_GRANTED }) prepareConnection()
-                    else permission.launch(required)
-                }) { Text(if(active) "Disconnect camera Wi-Fi" else "Connect camera") }
-                Text(status)
-                Text(profileMessage,style=MaterialTheme.typography.bodySmall)
-                OutlinedButton(enabled=!active && profileLoaded,onClick={
-                    profileLoaded=false
-                    scope.launch {
-                        try {
-                            withContext(Dispatchers.IO) { CameraProfileStore.forget(this@MainActivity) }
-                            ssid=""; password=""; wpa3=true; bluetoothName=null; bluetoothPassword=null
-                            profileMessage="Saved camera forgotten."
-                        } catch(_:Exception) { profileMessage="Unable to forget the saved camera." }
-                        finally { profileLoaded=true }
-                    }
-                }) { Text("Forget camera") }
-                Text("A notification keeps camera sync visible. A saved watcher retries connections and restores after process restart until its final collection succeeds, or you stop it.")
-                OutlinedButton(onClick={
-                    runCatching { startActivity(Intent().setClassName(CameraBridge.MAIN,"dev.om1.importer.MainActivity")) }
-                        .onFailure { wifi.status.value="Install OM-1 Importer to read camera capabilities." }
-                }) { Text("Return to OM-1 Importer") }
+                Card(colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.primaryContainer)) { Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) { Text(if(active) "Camera Wi-Fi is connected" else "Connect your OM-1",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold,color=MaterialTheme.colorScheme.onPrimaryContainer);Text(if(active) "Return to Importer when you are ready to sync." else "Scan once to save your camera details, then reconnect in one tap.",color=MaterialTheme.colorScheme.onPrimaryContainer) } }
+                Text("1. Add your camera",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
+                ElevatedCard { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                    Button(enabled=!active && profileLoaded,onClick={ scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setCaptureActivity(CameraQrActivity::class.java).setPrompt("Scan the Wi-Fi QR code on your OM camera").setBeepEnabled(false).setBarcodeImageEnabled(false)) },modifier=Modifier.fillMaxWidth()) { Text("Scan camera Wi-Fi QR code") }
+                    Text("Or enter the network details manually.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedTextField(ssid,{ssid=it; bluetoothName=null; bluetoothPassword=null},enabled=!active && profileLoaded,label={Text("Camera Wi-Fi name (SSID)")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                    OutlinedTextField(password,{password=it; bluetoothName=null; bluetoothPassword=null},enabled=!active && profileLoaded,label={Text("Camera Wi-Fi password")},singleLine=true,visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),modifier=Modifier.fillMaxWidth())
+                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) { FilterChip(wpa3,{wpa3=true},enabled=!active && profileLoaded,label={Text("WPA3")});FilterChip(!wpa3,{wpa3=false},enabled=!active && profileLoaded,label={Text("WPA2")}) }
+                    if(bluetoothName!=null) Row(verticalAlignment=Alignment.CenterVertically) { Checkbox(wakeBluetooth,{wakeBluetooth=it},enabled=!active);Text("Wake camera Wi-Fi with Bluetooth",Modifier.weight(1f)) }
+                } }
+                Text("2. Connect",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
+                Button(enabled=profileLoaded && (active || (ssid.isNotBlank() && password.isNotEmpty())),onClick={ if(active) startService(Intent(this@MainActivity,CameraService::class.java).setAction("stop")) else if(required.all { checkSelfPermission(it)==PackageManager.PERMISSION_GRANTED }) prepareConnection() else permission.launch(required) },modifier=Modifier.fillMaxWidth()) { Text(if(active) "Disconnect camera Wi-Fi" else "Connect camera") }
+                Card(colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.surfaceVariant)) { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) { Text("Connection status",style=MaterialTheme.typography.labelLarge);Text(status);Text(profileMessage,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) } }
+                Text("Connection notes",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
+                Text("If a VPN blocks camera access, exclude only Camera Link using its split-tunnel settings. A notification keeps a saved watcher visible and able to retry after restarts.",style=MaterialTheme.typography.bodyMedium)
+                OutlinedButton(enabled=!active && profileLoaded,onClick={ profileLoaded=false;scope.launch { try { withContext(Dispatchers.IO) { CameraProfileStore.forget(this@MainActivity) };ssid=""; password=""; wpa3=true; bluetoothName=null; bluetoothPassword=null;profileMessage="Saved camera forgotten." } catch(_:Exception) { profileMessage="Unable to forget the saved camera." } finally { profileLoaded=true } } },modifier=Modifier.fillMaxWidth()) { Text("Forget saved camera") }
+                OutlinedButton(onClick={ runCatching { startActivity(Intent().setClassName(CameraBridge.MAIN,"dev.om1.importer.MainActivity")) }.onFailure { wifi.status.value="Install OM-1 Importer to read camera capabilities." } },modifier=Modifier.fillMaxWidth()) { Text("Return to OM-1 Importer") }
+                Text(BuildConfig.VERSION_NAME,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.outline)
             }
         }
     }
 }
+
+@Composable private fun CameraStateTag(label:String,color:Color) = Surface(color=color.copy(alpha=.14f),shape=MaterialTheme.shapes.small) { Text(label,Modifier.padding(horizontal=9.dp,vertical=5.dp),style=MaterialTheme.typography.labelSmall,fontWeight=FontWeight.Bold,color=color) }

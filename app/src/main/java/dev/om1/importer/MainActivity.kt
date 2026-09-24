@@ -17,6 +17,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -36,7 +39,7 @@ class MainActivity:ComponentActivity() {
         super.onCreate(savedInstanceState);enableEdgeToEdge()
         acceptCameraReturn(intent)
         lifecycle.addObserver(LifecycleEventObserver { _,event -> if(event==Lifecycle.Event.ON_RESUME) resumeCount++ })
-        setContent { MaterialTheme { Screen() } }
+        setContent { ImporterTheme { Screen() } }
     }
     override fun onNewIntent(intent:Intent) {
         super.onNewIntent(intent)
@@ -202,57 +205,66 @@ class MainActivity:ComponentActivity() {
                 finally { cloudBusy=false }
             }
         }
-        Scaffold { padding ->
-            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
-                Text("OM-1 Importer",style=MaterialTheme.typography.headlineMedium)
-                Text("Shoot. Switch off. Import during a break.",style=MaterialTheme.typography.titleMedium)
-                Card { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                    Text(sessionText);Text(importStatus)
-                    Text("${rows.count { it.state=="UPLOADED" }} uploaded · ${rows.count { it.state in setOf("READY","UPLOADING","CREATE_PENDING") }} queued · ${rows.count { it.state=="DISCOVERED" }} on camera")
+        Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal=20.dp, vertical=18.dp), verticalArrangement=Arrangement.spacedBy(16.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement=Arrangement.SpaceBetween, verticalAlignment=Alignment.CenterVertically) {
+                    Column { Text("OM-1 Importer", style=MaterialTheme.typography.headlineMedium, fontWeight=FontWeight.Bold); Text("Bring your camera roll home", style=MaterialTheme.typography.bodyLarge) }
+                    StatusTag(if(running) "SYNCING" else if(db.session()!=null) "READY" else "SETUP", if(running) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary)
+                }
+                Card(colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.primaryContainer)) { Column(Modifier.padding(20.dp), verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                    Text("Current session", style=MaterialTheme.typography.labelLarge, color=MaterialTheme.colorScheme.onPrimaryContainer)
+                    Text(sessionText, style=MaterialTheme.typography.titleLarge, fontWeight=FontWeight.SemiBold, color=MaterialTheme.colorScheme.onPrimaryContainer)
+                    Text(importStatus, color=MaterialTheme.colorScheme.onPrimaryContainer)
+                    HorizontalDivider(color=MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha=.18f))
+                    Text("${rows.count { it.state=="UPLOADED" }} uploaded  ·  ${rows.count { it.state in setOf("READY","UPLOADING","CREATE_PENDING") }} queued  ·  ${rows.count { it.state=="DISCOVERED" }} on camera", style=MaterialTheme.typography.bodyMedium, color=MaterialTheme.colorScheme.onPrimaryContainer)
                     if(running) Button(onClick={startService(Intent(this@MainActivity,ImportService::class.java).setAction("stop"))}) { Text("Pause import") }
-                    else {
-                        Button(onClick={begin("import")},enabled=db.session()!=null) { Text("Sync this session now") }
-                        OutlinedButton(enabled=db.session()!=null,onClick={
-                            db.endSession();ImportWorker.cancel(this@MainActivity)
-                            runCatching { startService(Intent().setClassName(CameraBridge.HELPER,CameraBridge.SERVICE).setAction("stop")) }
-                        }) { Text("End session") }
-                        OutlinedTextField(sessionStart,{sessionStart=it},label={Text("Session start (YYYY-MM-DD HH:mm)")},singleLine=true,modifier=Modifier.fillMaxWidth())
-                        OutlinedTextField(sessionEnd,{sessionEnd=it},label={Text("Session end (YYYY-MM-DD HH:mm)")},singleLine=true,modifier=Modifier.fillMaxWidth())
-                        Text("Camera clock time zone: ${sessionZone.id}. New session destination: $chosenAlbumTitle",style=MaterialTheme.typography.bodySmall)
-                        Button(onClick={startTimedSession()}) { Text("Save session and watch for power-off") }
+                    else Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                        Button(onClick={begin("import")},enabled=db.session()!=null) { Text("Sync now") }
+                        OutlinedButton(enabled=db.session()!=null,onClick={ db.endSession();ImportWorker.cancel(this@MainActivity);runCatching { startService(Intent().setClassName(CameraBridge.HELPER,CameraBridge.SERVICE).setAction("stop")) } }) { Text("End") }
                     }
-                    Text("The interval is based on camera capture time, so it can be scheduled ahead or backfilled after the hike. Switch the camera OFF with Power-off Standby enabled; the helper keeps watching across app and phone restarts after permissions have been granted.",style=MaterialTheme.typography.bodySmall)
                 } }
-                Text("Google Photos",style=MaterialTheme.typography.titleLarge)
-                Text(if(account.isBlank()) "Not connected. Local imports work without Google setup." else account)
-                Button(enabled=!cloudBusy && !running,onClick={signIn()}) { Text(if(account.isBlank()) "Connect Google Photos" else "Reconnect / change Google account") }
-                if(account.isBlank()) Text("Connecting assigns unassigned queued photos to the selected account. Google Photos authorization must be configured before sign-in will work.",style=MaterialTheme.typography.bodySmall)
-                Text("Saved session destination: $albumLabel")
-                if(account.isNotBlank()) {
-                    OutlinedButton(enabled=!cloudBusy,onClick={albumAction(false)}) { Text("Load app-created albums") }
-                    FilterChip(chosenAlbum.isEmpty(),{chosenAlbum="";chosenAlbumTitle="General library"},label={Text("General library")})
-                    albums.forEach { (id,title)->FilterChip(chosenAlbum==id,{chosenAlbum=id;chosenAlbumTitle=title},label={Text(title)}) }
-                    OutlinedTextField(albumTitle,{albumTitle=it},label={Text("New album name")},modifier=Modifier.fillMaxWidth())
-                    OutlinedButton(enabled=!cloudBusy && albumTitle.isNotBlank(),onClick={albumAction(true)}) { Text("Create album") }
-                    Text("Album selection applies when you save a session. Already queued photos keep their destination.",style=MaterialTheme.typography.bodySmall)
-                }
-                Row { Switch(uploads,{uploads=it;db.set("uploadsEnabled",it.toString());if(it) UploadWorker.schedule(this@MainActivity)});Text("Upload queued photos") }
-                Row { Switch(cellular,{cellular=it;db.set("cellular",it.toString());UploadWorker.schedule(this@MainActivity)});Text("Allow cellular uploads") }
-                Row { Switch(cleanup,{cleanup=it;db.set("cleanup",it.toString());UploadWorker.schedule(this@MainActivity)});Text("Remove phone copy after confirmed upload") }
-                Text("Google Photos uploads use original quality and count toward your Google storage. Camera originals are never deleted.",style=MaterialTheme.typography.bodySmall)
-                OutlinedButton(onClick={scope.launch { withContext(Dispatchers.IO) { db.rows("state != 'UPLOADED'").forEach { db.update(it.id,"retry_at" to 0L) } };UploadWorker.schedule(this@MainActivity) }}) { Text("Retry / recheck uploads") }
-                if(message.isNotEmpty()) Text(message)
+                SectionTitle("Plan a shooting session", "The camera helper watches for power-off, then collects eligible photos.")
+                ElevatedCard { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(sessionStart,{sessionStart=it},label={Text("Start · YYYY-MM-DD HH:mm")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                    OutlinedTextField(sessionEnd,{sessionEnd=it},label={Text("End · YYYY-MM-DD HH:mm")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                    Text("Camera time zone: ${sessionZone.id}\nDestination: $chosenAlbumTitle",style=MaterialTheme.typography.bodySmall)
+                    Button(onClick={startTimedSession()}, modifier=Modifier.fillMaxWidth()) { Text("Save session & watch for power-off") }
+                } }
+                SectionTitle("Google Photos", if(account.isBlank()) "Optional—local imports work without it." else "Connected as $account")
+                ElevatedCard { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                    Button(enabled=!cloudBusy && !running,onClick={signIn()},modifier=Modifier.fillMaxWidth()) { Text(if(account.isBlank()) "Connect Google Photos" else "Change Google account") }
+                    Text("Saved session destination: $albumLabel",style=MaterialTheme.typography.bodyMedium)
+                    if(account.isNotBlank()) {
+                        OutlinedButton(enabled=!cloudBusy,onClick={albumAction(false)}) { Text("Load albums") }
+                        Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                            FilterChip(chosenAlbum.isEmpty(),{chosenAlbum="";chosenAlbumTitle="General library"},label={Text("General library")})
+                            albums.forEach { (id,title)->FilterChip(chosenAlbum==id,{chosenAlbum=id;chosenAlbumTitle=title},label={Text(title)}) }
+                        }
+                        OutlinedTextField(albumTitle,{albumTitle=it},label={Text("New album name")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                        OutlinedButton(enabled=!cloudBusy && albumTitle.isNotBlank(),onClick={albumAction(true)}) { Text("Create album") }
+                    }
+                } }
+                SectionTitle("Upload preferences", "Original-quality uploads count toward Google storage. Camera files are never deleted.")
+                ElevatedCard { Column(Modifier.padding(horizontal=16.dp,vertical=6.dp)) {
+                    PreferenceSwitch("Upload queued photos", uploads) { uploads=it;db.set("uploadsEnabled",it.toString());if(it) UploadWorker.schedule(this@MainActivity) }
+                    PreferenceSwitch("Allow cellular uploads", cellular) { cellular=it;db.set("cellular",it.toString());UploadWorker.schedule(this@MainActivity) }
+                    PreferenceSwitch("Remove phone copy after upload", cleanup) { cleanup=it;db.set("cleanup",it.toString());UploadWorker.schedule(this@MainActivity) }
+                    OutlinedButton(onClick={scope.launch { withContext(Dispatchers.IO) { db.rows("state != 'UPLOADED'").forEach { db.update(it.id,"retry_at" to 0L) } };UploadWorker.schedule(this@MainActivity) }},modifier=Modifier.padding(vertical=10.dp)) { Text("Retry pending uploads") }
+                } }
+                if(message.isNotEmpty()) Card(colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.errorContainer)) { Text(message,Modifier.padding(16.dp),color=MaterialTheme.colorScheme.onErrorContainer) }
                 if(rows.isNotEmpty()) {
-                    Text("Recent photos",style=MaterialTheme.typography.titleLarge)
-                    rows.takeLast(20).reversed().forEach { row -> Card { Column(Modifier.padding(12.dp)) {
-                        Text(row.path.substringAfterLast('/'));Text("${row.state.lowercase().replace('_',' ')} · ${row.size/1024} KiB")
-                        row.error?.let { Text(it) }
-                    } } }
+                    SectionTitle("Recent photos", "Latest 20 items")
+                    rows.takeLast(20).reversed().forEach { row -> ElevatedCard { Row(Modifier.fillMaxWidth().padding(14.dp),horizontalArrangement=Arrangement.SpaceBetween) { Column(Modifier.weight(1f)) { Text(row.path.substringAfterLast('/'),fontWeight=FontWeight.Medium);Text("${row.state.lowercase().replace('_',' ')} · ${row.size/1024} KiB",style=MaterialTheme.typography.bodySmall);row.error?.let { Text(it,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall) } }; StatusTag(row.state.replace('_',' '),MaterialTheme.colorScheme.secondary) } } }
                 }
-                OutlinedButton(onClick={startActivity(Intent(this@MainActivity,DiagnosticsActivity::class.java))}) { Text("Camera diagnostics and individual imports") }
-                OutlinedButton(onClick={scope.launch { message=try { withContext(Dispatchers.IO) { val r=SystemHttp(this@MainActivity,cellular).request("GET","https://www.googleapis.com/oauth2/v3/userinfo",emptyMap(),byteArrayOf());"Google connection responded HTTP ${r.code}." } } catch(e:Exception) { e.message ?: "Connection check failed." } }}) { Text("Test Google connection") }
-                Text("${BuildConfig.VERSION_NAME}",style=MaterialTheme.typography.bodySmall)
+                HorizontalDivider()
+                OutlinedButton(onClick={startActivity(Intent(this@MainActivity,DiagnosticsActivity::class.java))},modifier=Modifier.fillMaxWidth()) { Text("Camera diagnostics & individual imports") }
+                TextButton(onClick={scope.launch { message=try { withContext(Dispatchers.IO) { val r=SystemHttp(this@MainActivity,cellular).request("GET","https://www.googleapis.com/oauth2/v3/userinfo",emptyMap(),byteArrayOf());"Google connection responded HTTP ${r.code}." } } catch(e:Exception) { e.message ?: "Connection check failed." } }},modifier=Modifier.fillMaxWidth()) { Text("Test Google connection") }
+                Text(BuildConfig.VERSION_NAME,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.outline)
             }
         }
     }
 }
+
+@Composable private fun SectionTitle(title:String, subtitle:String) = Column(verticalArrangement=Arrangement.spacedBy(2.dp)) { Text(title,style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold);Text(subtitle,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }
+@Composable private fun StatusTag(label:String, color:Color) = Surface(color=color.copy(alpha=.14f),shape=MaterialTheme.shapes.small) { Text(label,Modifier.padding(horizontal=9.dp,vertical=5.dp),style=MaterialTheme.typography.labelSmall,color=color,fontWeight=FontWeight.Bold) }
+@Composable private fun PreferenceSwitch(label:String, checked:Boolean, onCheckedChange:(Boolean)->Unit) = Row(Modifier.fillMaxWidth().padding(vertical=9.dp),verticalAlignment=Alignment.CenterVertically) { Text(label,Modifier.weight(1f),style=MaterialTheme.typography.bodyLarge);Switch(checked,onCheckedChange) }
