@@ -1,5 +1,15 @@
 # Session and import reliability audit
 
+September 24 containment supersedes earlier camera-concurrency/cleanup descriptions:
+camera reads are capped at one in both processes and automatic original/payload
+cleanup is suspended. A pre-upload preview showed horizontal corruption. Two live
+serial reads of each of two affected photos returned matching hashes; one example
+visually recovered without blocks, and the other matched its earlier pre-parallel
+hash. This is strong evidence against the previous camera-download path, not proof
+of a specific firmware defect. Cloud upload parallelism is unchanged. Validation:
+83 JVM tests, 19 isolated phone tests, the opt-in hardware serial-read test, both
+builds and lint passed. No cloud photos were deleted or re-uploaded.
+
 Date: 2026-09-12. Scope: session persistence and selection, camera connection
 lifecycle, local-original integrity, cloud scheduling and confirmation, and UI
 handoffs. This is a source audit plus regression testing, not a claim that every

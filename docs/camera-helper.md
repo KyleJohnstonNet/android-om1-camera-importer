@@ -51,13 +51,15 @@ JPEG download, status, card-slot query/selection and connection release. They ac
 path or cloud token. Camera HTTP binds to the helper-owned camera network and uses
 the fixed camera host; redirects, proxies and internet-route fallback are disabled.
 Directory responses and JPEG sizes are bounded. Listings and slot changes are
-exclusive; JPEG downloads permit up to ten concurrent requests on the selected
-slot, driven by the importer's adaptive throughput controller. Battery saver
+exclusive; JPEG downloads are temporarily restricted to one request at a time
+while pre-upload pixel corruption is investigated. The helper enforces this even
+for older clients. Battery saver
 rejects new camera operations and disconnects in-flight transfers.
 
 The helper returns a read-only file descriptor and unlinks its temporary copy.
 The importer checks size, SHA-256 and JPEG dimensions before finalizing a private
-original. Content hashes support local deduplication. JPEG trailing data is retained.
+original. These checks do not verify source pixels or compare against a camera-side
+hash. Content hashes support local deduplication. JPEG trailing data is retained.
 The queue and cleanup rules are described in [preview queue](preview-queue.md).
 
 ## Validation scope

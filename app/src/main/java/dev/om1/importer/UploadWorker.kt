@@ -48,7 +48,7 @@ class UploadWorker(context:Context,params:WorkerParameters):CoroutineWorker(cont
                 val limit=adaptive.limit
                 val available=UploadScheduling.select(db.rows(
                     "(state IN ('READY','UPLOADING','CREATE_PENDING','UNCERTAIN') OR (state='UPLOADED' AND local IS NOT NULL AND ?='true')) AND account=?",
-                    arrayOf(db.setting("cleanup","true"),db.setting("accountId"))),active.keys,attempted,System.currentTimeMillis(),limit)
+                    arrayOf(if(dev.om1.importer.core.CameraImportSafety.RETAIN_LOCAL_COPIES) "false" else db.setting("cleanup","true"),db.setting("accountId"))),active.keys,attempted,System.currentTimeMillis(),limit)
                 for(row in available) {
                     attempted[row.id]=row.priority to row.retryAt
                     active[row.id]=launch { upload(db,row,started,adaptive) }
@@ -175,6 +175,7 @@ class UploadWorker(context:Context,params:WorkerParameters):CoroutineWorker(cont
         } finally { activity.update { it-original.id } }
     }
     private fun cleanup(db:QueueStore,row:PhotoRow) {
+        if(dev.om1.importer.core.CameraImportSafety.RETAIN_LOCAL_COPIES) return
         synchronized(OriginalFiles.lock) {
             UploadPayload.cleanup(applicationContext,db,row)
             if(db.setting("cleanup","true")!="true" || row.state!="UPLOADED" || row.mediaId.isNullOrBlank() || row.account.isBlank() || row.local==null) return

@@ -120,7 +120,7 @@ class CameraService:Service() {
             }
             val download=operation==CameraBridge.DOWNLOAD_JPEG
             val downloadKey=Any()
-            if(reading || (if(download) downloads.size>=10 else downloads.isNotEmpty())) {
+            if(reading || (if(download) downloads.size>=dev.om1.importer.core.CameraImportSafety.MAX_DOWNLOADS else downloads.isNotEmpty())) {
                 respond(error="Camera transfer slots are busy. Retry shortly.");return
             }
             if(download) {

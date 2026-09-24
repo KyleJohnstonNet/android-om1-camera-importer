@@ -336,7 +336,9 @@ class MainActivity:ComponentActivity() {
                 ElevatedCard { Column(Modifier.padding(horizontal=16.dp,vertical=6.dp)) {
                     PreferenceSwitch("Upload queued photos", uploads) { uploads=it;db.set("uploadsEnabled",it.toString());if(it) UploadWorker.schedule(this@MainActivity) }
                     PreferenceSwitch("Allow cellular uploads", cellular) { cellular=it;db.set("cellular",it.toString());UploadWorker.schedule(this@MainActivity) }
-                    PreferenceSwitch("Remove phone original after upload", cleanup) { cleanup=it;db.set("cleanup",it.toString());UploadWorker.schedule(this@MainActivity) }
+                    if(dev.om1.importer.core.CameraImportSafety.RETAIN_LOCAL_COPIES)
+                        Text("Safety mode: camera downloads are serial. Phone originals and GPS upload copies are temporarily kept after upload while corruption is investigated. This uses additional phone storage.",Modifier.padding(vertical=9.dp),style=MaterialTheme.typography.bodyMedium)
+                    else PreferenceSwitch("Remove phone original after upload", cleanup) { cleanup=it;db.set("cleanup",it.toString());UploadWorker.schedule(this@MainActivity) }
                     OutlinedButton(onClick={scope.launch { withContext(Dispatchers.IO) { db.rows("state != 'UPLOADED'").forEach { db.update(it.id,"retry_at" to 0L) } };UploadWorker.schedule(this@MainActivity) }},modifier=Modifier.padding(vertical=10.dp)) { Text("Retry pending uploads") }
                 } }
                 SectionTitle("Photo locations", "Record this phone’s GPS independently of camera imports. Both options are off by default.")

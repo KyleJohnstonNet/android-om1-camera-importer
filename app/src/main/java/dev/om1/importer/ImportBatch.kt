@@ -55,10 +55,10 @@ object ImportBatch {
                             db.rows("camera=? AND slot=? AND state='DISCOVERED'",arrayOf(camera,slot.toString()))
                                 .filter { it.id in discovery.ids }.sortedBy { it.attempts }
                         }
-                        val adaptive=AdaptiveUploads(maximum=10,initial=2) { android.os.SystemClock.elapsedRealtime() }
+                        val adaptive=AdaptiveUploads(maximum=1,initial=1) { android.os.SystemClock.elapsedRealtime() }
                         adaptive.networkChanged(slot.toLong())
                         val result=CameraImportPipeline.run(pending,progress={ done,errors,active,width ->
-                            status.value="Slot $slot · imported $done/${pending.size} · $errors failed · ${active.size} active · adaptive limit $width/10." +
+                            status.value="Slot $slot · imported $done/${pending.size} · $errors failed · ${active.size} active · safe serial limit $width/1." +
                                 if(active.isEmpty()) "" else " " + active.joinToString { it.path.substringAfterLast('/') }
                         },fallback={ status.value="Slot $slot · transfer interrupted. Retrying failed photos one at a time…" },controller=adaptive) { p ->
                             PowerPolicy.check(context)

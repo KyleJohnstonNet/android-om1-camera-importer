@@ -43,10 +43,10 @@ verification work, including newly shot photos and local duplicate handling.
 - Camera imports scan both SD card slots, keeping directory scans and slot
   switches serial. Each queue entry records its source slot. The previous playback
   slot is restored afterward when the camera remains reachable.
-- Camera downloads share the upload throughput controller: start at two, grow
-  up to ten, keep extra concurrency only when throughput improves, and back off
-  on stalls or failures. Failed transfers drain before serial retries. Actual
-  speedup depends on the camera's Wi-Fi server.
+- Camera downloads are temporarily limited to **one at a time in both apps** while
+  horizontal image corruption is investigated. Google Photos uploads remain adaptive
+  and parallel. Hashes across IPC and JPEG marker checks do not prove the camera
+  supplied uncorrupted pixels; concurrent camera reads are not considered verified safe.
 - A durable queue resumes uploads and freezes the account and session album at discovery.
 - Upload concurrency adapts from one to eight photos, starting at three. It measures
   acknowledged photo bytes in 10-second windows and tries one additional slot at
@@ -66,7 +66,9 @@ verification work, including newly shot photos and local duplicate handling.
   are used when available, with retained previews used after original cleanup.
   Previews are retained only for the 20 displayed recent rows and pruned as rows
   leave that list. Older photos whose originals were already removed may show a placeholder.
-- Camera originals are never deleted. Phone copies are removed only after confirmed upload.
+- Camera originals are never deleted. Automatic phone-original and GPS upload-copy
+  cleanup is temporarily suspended, even if the saved cleanup preference was enabled.
+  Copies consume phone storage until the corruption investigation is resolved.
 - After a successful standby collection, a persisted gate requires a new observed
   standby → powered → standby cycle before another automatic wake. Our own powered
   controller is ignored until a standby baseline is observed. One final collection

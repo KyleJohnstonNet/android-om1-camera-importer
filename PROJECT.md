@@ -62,3 +62,20 @@ Validation: 83 JVM tests passed (including nine stats regressions), both APK bui
 and lint passed, and both stats panels were visually checked on the connected phone.
 Live populated stats still need a normal camera sighting/import; the phone check
 verified unknown/idle states without forcing a camera wake.
+
+Corruption containment: horizontal corruption was found in a retained pre-upload
+preview. Serial camera downloads are now enforced in both apps; parallel cloud
+uploads remain enabled. Automatic original/payload cleanup is suspended and the UI
+explains the extra storage. Existing cloud items are not deleted or re-uploaded.
+Camera concurrency remains a suspect, not a proven cause. The opt-in
+SerialCameraReadTest accepts cameraPaths/cameraSlot instrumentation arguments to
+read at most two files twice, compare hashes, and retain diagnostic copies outside
+the queue; it skips without explicit arguments and requires an existing connection.
+Hardware validation: both affected examples were read twice serially. Each pair
+had identical hashes; one visually clean reread differs from the corrupt import,
+and the other matches its earlier pre-parallel import hash. This strongly implicates
+the previous camera download path, without isolating the camera server implementation.
+83 JVM tests, both build/lint tasks, 19 isolated phone tests, and the opt-in serial
+read test passed. Both safety APKs are installed. Existing cloud items are unchanged;
+any recovery/re-upload must be a separate explicit action. Private diagnostic photos
+and queue copies stay outside the repository.
