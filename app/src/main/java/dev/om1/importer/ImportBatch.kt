@@ -10,6 +10,7 @@ import org.json.JSONObject
 object ImportBatch {
     val status=MutableStateFlow("Ready for a shooting break.")
     val running=MutableStateFlow(false)
+    val cardStats=MutableStateFlow<List<dev.om1.importer.core.CameraCardStats>>(emptyList())
     private val lock=Mutex()
     private var active: Job?=null
     fun cancel() { active?.cancel() }
@@ -32,6 +33,7 @@ object ImportBatch {
             ownsConnection=true
             check(System.currentTimeMillis()>=selected.starts) { "Session has not started yet." }
             status.value="Reading all camera directories…"
+            cardStats.value=emptyList()
             scannedAt=System.currentTimeMillis()
             val originalSlot=CameraHelperClient.cardSlot(context)
             var imported=0;var failures=0;var matched=0;var total=0;var invalid=0
@@ -44,6 +46,7 @@ object ImportBatch {
                         status.value="Selecting camera card slot $slot…"
                         CameraHelperClient.cardSlot(context,slot)
                         val (camera,files)=enumerate(context,slot)
+                        cardStats.value=cardStats.value+dev.om1.importer.core.CameraCardStats(slot,files.size,System.currentTimeMillis())
                         val discovery=withContext(Dispatchers.IO) {
                             db.discover(camera,files,selected.id).also { PhotoThumbnails.prune(context) }
                         }

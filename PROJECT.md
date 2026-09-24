@@ -50,3 +50,15 @@ camera or claim old-photo offsets can be recovered from the newest JPEG timestam
 
 Public privacy and terms documents are provided in PRIVACY.md and TERMS.md,
 linked from the README. Their publication does not establish Google verification.
+
+Camera stats: passive timestamped BLE signal/controller observations and a five-second
+aggregate camera transfer rate are exposed through the existing status IPC and shown
+in both apps. Importer also shows per-card importable JPEG counts from completed
+directory scans in its most recent import. No additional camera requests or wake-ups.
+Battery and card capacity remain explicitly unavailable pending verified import-mode
+readbacks; the official app's live-view battery metadata is not a verified passive
+or playback-mode read. Stats are in-memory and labeled as historical observations.
+Validation: 83 JVM tests passed (including nine stats regressions), both APK builds
+and lint passed, and both stats panels were visually checked on the connected phone.
+Live populated stats still need a normal camera sighting/import; the phone check
+verified unknown/idle states without forcing a camera wake.

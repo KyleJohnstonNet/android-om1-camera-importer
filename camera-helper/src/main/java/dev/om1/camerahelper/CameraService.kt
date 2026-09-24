@@ -80,7 +80,10 @@ class CameraService:Service() {
             }
             if(operation==CameraBridge.STATUS) {
                 val status=CameraSession.activity.value
-                respond(report=org.json.JSONObject().put("title",status.title).put("detail",status.detail).put("until",status.until).toString())
+                val stats=CameraSession.snapshot()
+                respond(report=org.json.JSONObject().put("title",status.title).put("detail",status.detail).put("until",status.until)
+                    .put("stats",org.json.JSONObject().put("seenAt",stats.seenAt).put("rssi",stats.rssi)
+                        .put("powered",stats.powered).put("bytesPerSecond",stats.bytesPerSecond)).toString())
                 return
             }
             if(operation==CameraBridge.RELEASE) {
@@ -131,6 +134,7 @@ class CameraService:Service() {
             lastActivity=SystemClock.elapsedRealtime()
             scope.launch {
                 var failed=false
+                var receivedBytes=0L
                 try {
                     if(operation==CameraBridge.CARD_SLOT) {
                         // A failed switch leaves the selected card unknown, never the old cached slot.
@@ -145,6 +149,8 @@ class CameraService:Service() {
                             CameraHttp.download(this@CameraService,network,path,expected) { bytes ->
                                 scope.launch {
                                     if(downloadKey in downloads && wifi.network!=null) {
+                                        CameraSession.transferRate.received((bytes-receivedBytes).coerceAtLeast(0),SystemClock.elapsedRealtime())
+                                        receivedBytes=maxOf(receivedBytes,bytes)
                                         downloads[downloadKey]="Slot ${slot.takeIf { it>0 } ?: "current"} · ${path.substringAfterLast('/')} · ${bytes*100/expected}%"
                                         downloadStatus()
                                         runCatching { reply.send(Message.obtain(null,operation,requestId,0).apply {
@@ -154,6 +160,8 @@ class CameraService:Service() {
                                 }
                             }
                         }
+                        CameraSession.transferRate.received((expected-receivedBytes).coerceAtLeast(0),SystemClock.elapsedRealtime())
+                        receivedBytes=maxOf(receivedBytes,expected)
                         try { ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY).use {
                             respond(report=org.json.JSONObject(report).put("slot",slot).toString(),descriptor=it)
                         } }

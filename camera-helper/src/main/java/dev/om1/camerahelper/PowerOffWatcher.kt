@@ -33,6 +33,8 @@ class PowerOffWatcher(private val context: Context) {
                 val bytes=record.getManufacturerSpecificData(1232) ?: record.getManufacturerSpecificData(2545) ?: return
                 val flags=CameraBleProtocol.advertisementFlags(bytes) ?: return
                 val powered=flags and 1!=0
+                CameraSession.stats.value=CameraSession.stats.value.copy(seenAt=System.currentTimeMillis(),
+                    rssi=result.rssi.takeIf { it in -127..20 },powered=powered)
                 if(eligible(powered)) results.trySend(Outcome(true,"New camera standby cycle detected."))
                 else {
                     val detail=if(powered) "Camera Bluetooth seen; waiting for standby."

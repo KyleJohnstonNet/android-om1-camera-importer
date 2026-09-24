@@ -77,6 +77,8 @@ class MainActivity:ComponentActivity() {
         val uploadActivity by UploadWorker.activity.collectAsStateWithLifecycle()
         val uploadLimit by UploadWorker.parallelLimit.collectAsStateWithLifecycle()
         var cameraStatus by remember { mutableStateOf(dev.om1.importer.core.ActivityStatus("Checking Camera Link","Reading the current camera activity…")) }
+        var cameraStats by remember { mutableStateOf<dev.om1.importer.core.CameraStats?>(null) }
+        val cardStats by ImportBatch.cardStats.collectAsStateWithLifecycle()
         var uploadOverview by remember { mutableStateOf("Checking the upload queue…") }
         var message by rememberSaveable { mutableStateOf("") }
         var account by remember { mutableStateOf("") }
@@ -126,12 +128,14 @@ class MainActivity:ComponentActivity() {
         LaunchedEffect(Unit) {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while(isActive) {
-                    try { cameraStatus=CameraHelperClient.status(this@MainActivity) }
+                    try { val snapshot=CameraHelperClient.status(this@MainActivity);cameraStatus=snapshot.activity;cameraStats=snapshot.stats }
                     catch(_:TimeoutCancellationException) {
+                        cameraStats=null
                         cameraStatus=dev.om1.importer.core.ActivityStatus("Camera Link is not responding","Retrying its status automatically. Open Camera Link if this continues.")
                     }
                     catch(e:CancellationException) { throw e }
                     catch(_:Exception) {
+                        cameraStats=null
                         cameraStatus=dev.om1.importer.core.ActivityStatus("Camera Link status unavailable","Open Camera Link to check its state and permissions. Make sure both apps are updated.")
                     }
                     delay(2000)
@@ -297,6 +301,15 @@ class MainActivity:ComponentActivity() {
                         Button(onClick={begin("import")},enabled=db.session()!=null) { Text("Sync now") }
                         OutlinedButton(enabled=db.session()!=null,onClick={ db.endSession();ImportWorker.cancel(this@MainActivity);runCatching { startService(Intent().setClassName(CameraBridge.HELPER,CameraBridge.SERVICE).setAction("stop")) } }) { Text("End") }
                     }
+                } }
+                ElevatedCard { Column(Modifier.fillMaxWidth().padding(16.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                    Text("Camera stats",style=MaterialTheme.typography.titleMedium)
+                    cameraStats?.lines(now)?.forEach { Text(it,style=MaterialTheme.typography.bodySmall) }
+                        ?: Text("Camera Link stats unavailable",style=MaterialTheme.typography.bodySmall)
+                    Text("Card counts · most recent import",style=MaterialTheme.typography.labelMedium)
+                    for(slot in 1..2) Text(cardStats.firstOrNull { it.slot==slot }?.text()
+                        ?: "Slot $slot · no completed directory scan",style=MaterialTheme.typography.bodySmall)
+                    Text("Observations only; no extra camera wake-ups. Counts exclude RAW, movies and unsupported JPEGs. Stats reset when their app restarts.",style=MaterialTheme.typography.bodySmall)
                 } }
                 SectionTitle("Plan a shooting session", "The camera helper watches for power-off, then collects eligible photos.")
                 ElevatedCard { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {

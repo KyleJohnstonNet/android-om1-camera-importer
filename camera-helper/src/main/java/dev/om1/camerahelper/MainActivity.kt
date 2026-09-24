@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
         val active by wifi.active.collectAsStateWithLifecycle()
         val status by wifi.status.collectAsStateWithLifecycle()
         val activity by CameraSession.activity.collectAsStateWithLifecycle()
+        val cameraStats by CameraSession.stats.collectAsStateWithLifecycle()
         val watcherRunning by CameraSession.monitoring.collectAsStateWithLifecycle()
         var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
         LaunchedEffect(Unit) { while(true) { now=System.currentTimeMillis();delay(1000) } }
@@ -179,6 +180,13 @@ class MainActivity : ComponentActivity() {
                 Text("Connection notes",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)
                 Text("If a VPN blocks camera access, exclude only Camera Link using its split-tunnel settings. A notification keeps a saved watcher visible and able to retry after restarts.",style=MaterialTheme.typography.bodyMedium)
                 OutlinedButton(enabled=!active && profileLoaded,onClick={ profileLoaded=false;scope.launch { try { withContext(Dispatchers.IO) { CameraProfileStore.forget(this@MainActivity) };ssid=""; password=""; wpa3=true; bluetoothName=null; bluetoothPassword=null;profileMessage="Saved camera forgotten." } catch(_:Exception) { profileMessage="Unable to forget the saved camera." } finally { profileLoaded=true } } },modifier=Modifier.fillMaxWidth()) { Text("Forget saved camera") }
+                Card { Column(Modifier.fillMaxWidth().padding(16.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                    Text("Camera stats",style=MaterialTheme.typography.titleMedium)
+                    cameraStats.copy(bytesPerSecond=CameraSession.snapshot().bytesPerSecond).lines(now).forEach {
+                        Text(it,style=MaterialTheme.typography.bodySmall)
+                    }
+                    Text("Observed during existing scans/transfers; no extra wake-ups. Resets when Camera Link restarts. Per-card JPEG counts are in Importer.",style=MaterialTheme.typography.bodySmall)
+                } }
                 OutlinedButton(onClick={ runCatching { startActivity(Intent().setClassName(CameraBridge.MAIN,"dev.om1.importer.MainActivity")) }.onFailure { wifi.status.value="Install OM-1 Importer to read camera capabilities." } },modifier=Modifier.fillMaxWidth()) { Text("Return to OM-1 Importer") }
                 Text(BuildConfig.VERSION_NAME,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.outline)
             }

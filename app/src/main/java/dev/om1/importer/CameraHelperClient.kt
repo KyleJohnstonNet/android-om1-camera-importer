@@ -21,11 +21,17 @@ object CameraHelperClient {
         }) { Unit }
     }
     suspend fun read(context: Context): String = request(context,CameraBridge.READ_CAPABILITIES) { it.getString("report")!! }
-    suspend fun status(context:Context):dev.om1.importer.core.ActivityStatus = withTimeout(4000) {
-        request(context,CameraBridge.STATUS) {
-            val json=org.json.JSONObject(it.getString("report")!!)
-            dev.om1.importer.core.ActivityStatus(json.getString("title"),json.getString("detail"),json.optLong("until"))
-        }
+    data class Snapshot(val activity:dev.om1.importer.core.ActivityStatus,val stats:dev.om1.importer.core.CameraStats)
+    internal fun parseSnapshot(report:String):Snapshot {
+        val json=org.json.JSONObject(report)
+        val stats=json.optJSONObject("stats") ?: org.json.JSONObject()
+        return Snapshot(dev.om1.importer.core.ActivityStatus(json.getString("title"),json.getString("detail"),json.optLong("until")),
+            dev.om1.importer.core.CameraStats(stats.optLong("seenAt"),
+                if(!stats.isNull("rssi")) stats.getInt("rssi").takeIf { it in -127..20 } else null,
+                if(!stats.isNull("powered")) stats.getBoolean("powered") else null,stats.optLong("bytesPerSecond").coerceAtLeast(0)))
+    }
+    suspend fun status(context:Context):Snapshot = withTimeout(4000) {
+        request(context,CameraBridge.STATUS) { parseSnapshot(it.getString("report")!!) }
     }
     suspend fun cardSlot(context:Context,slot:Int=0):Int = request(context,CameraBridge.CARD_SLOT,extras=Bundle().apply { putInt("slot",slot) }) {
         org.json.JSONObject(it.getString("report")!!).getInt("slot")

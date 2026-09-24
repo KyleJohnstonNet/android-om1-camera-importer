@@ -33,6 +33,13 @@ verification work, including newly shot photos and local duplicate handling.
 - Standby monitoring uses 15-second low-power Bluetooth scan windows followed by
   45-second pauses. Detection can be delayed during the pauses; Sync now remains available.
   Post-import/error cooldowns also wait 45 seconds; failure backoff can extend the wait.
+- Camera stats show timestamped passive Bluetooth sightings, RSSI and last controller
+  state (not proof of the physical switch), plus aggregate download throughput over
+  five seconds. Importer shows importable JPEG counts per card from completed directory
+  scans in the most recent import, including files outside the session window. Missing
+  or failed scans are unknown, not zero. Stats are in-memory and reset with their app.
+  No extra scans, Wi-Fi wakes or live-view requests are made. Battery and free card
+  space remain unavailable until their import-mode protocol and units are verified.
 - Camera imports scan both SD card slots, keeping directory scans and slot
   switches serial. Each queue entry records its source slot. The previous playback
   slot is restored afterward when the camera remains reachable.
