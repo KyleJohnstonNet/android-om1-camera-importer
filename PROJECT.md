@@ -79,3 +79,12 @@ the previous camera download path, without isolating the camera server implement
 read test passed. Both safety APKs are installed. Existing cloud items are unchanged;
 any recovery/re-upload must be a separate explicit action. Private diagnostic photos
 and queue copies stay outside the repository.
+
+Explicitly authorized recovery of the two diagnostic examples is complete: verified
+serial copies were added as separate, idempotent recovery rows with the original
+account/album and frozen original-byte payloads. Google Photos creation receipts
+were confirmed for both; prior queue receipts/cloud items were preserved. The
+opt-in VerifiedRecoveryUploadTest requires explicit approval arguments and verified
+hashes; ordinary test runs skip its real-data/upload operation. Its isolated
+transaction, destination-preservation, account-change, and idempotency test passed,
+as did the live recovery and Android lint. Phone originals remain retained.
