@@ -30,6 +30,9 @@ verification work, including newly shot photos and local duplicate handling.
   between scans, wake/connection steps and per-file transfer progress. Timed phases
   show a countdown; Camera Link's foreground notification follows the same status.
   Importer also shows upload progress, its adaptive limit and automatic retry waits.
+- Standby monitoring uses 15-second low-power Bluetooth scan windows followed by
+  45-second pauses. Detection can be delayed during the pauses; Sync now remains available.
+  Post-import/error cooldowns also wait 45 seconds; failure backoff can extend the wait.
 - Camera imports scan both SD card slots, keeping directory scans and slot
   switches serial. Each queue entry records its source slot. The previous playback
   slot is restored afterward when the camera remains reachable.

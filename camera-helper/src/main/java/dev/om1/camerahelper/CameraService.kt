@@ -298,7 +298,7 @@ class CameraService:Service() {
                         val profile=CameraProfileStore.load(this@CameraService) ?: error("Scan the camera QR code to enable automatic sync.")
                         val name=profile.bluetoothName ?: error("Save Bluetooth details from the camera QR code.")
                         check(profile.bluetoothPassword!=null)
-                        val scanEnd=System.currentTimeMillis()+25_000
+                        val scanEnd=System.currentTimeMillis()+PowerOffWatcher.SCAN_WINDOW_MS
                         report("Scanning for camera standby",
                             if(System.currentTimeMillis()>=current.ends) "Listening over Bluetooth for the final session collection."
                             else "Listening over Bluetooth. Waiting for the camera to enter power-off standby.",scanEnd)
@@ -308,7 +308,7 @@ class CameraService:Service() {
                             if(before!=cycle.phase) prefs.edit().putInt("cycle",cycle.phase).commit()
                             eligible || (!powered && System.currentTimeMillis()>=current.ends)
                         }) { report("Scanning for camera standby",it,scanEnd) }
-                        if(!outcome.standby) { waitBetween(5,outcome.detail+" Next Bluetooth scan shortly.");continue }
+                        if(!outcome.standby) { waitBetween(PowerOffWatcher.REST_SECONDS,outcome.detail+" Next Bluetooth scan after this pause.");continue }
                         PowerPolicy.check(this@CameraService)
                         val owner=sessionId
                         // Persist before attempting a wake: process death must not create a hot retry loop.
@@ -334,7 +334,7 @@ class CameraService:Service() {
                     } catch(e:CancellationException) { throw e }
                     catch(e:Exception) { wifi.status.value=e.message?.take(180) ?: "Camera unavailable; retrying…";report("Camera unavailable",wifi.status.value) }
                     finally { if(ownerGeneration==generation) { wifi.disconnect();connectionSessionId="" } }
-                    if(window!=null) waitBetween(30,CameraSession.activity.value.detail+" Next Bluetooth scan after this pause.")
+                    if(window!=null) waitBetween(PowerOffWatcher.REST_SECONDS,CameraSession.activity.value.detail+" Next Bluetooth scan after this pause.")
                 }
             } finally { if(window==null && ownerGeneration==generation) finishService() }
         }
